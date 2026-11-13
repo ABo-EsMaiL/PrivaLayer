@@ -370,12 +370,21 @@ void NavigateBrowser(int id, const std::wstring& url) {
     if (!tab || tab->closed || url.empty()) return;
     std::wstring target = url;
     if (target.find(L"://") == std::wstring::npos) {
-        if (target.find(L' ') != std::wstring::npos) {
+        const bool localAddress = target.rfind(L"localhost", 0) == 0 ||
+                                  target.rfind(L"127.0.0.1", 0) == 0;
+        const bool looksLikeDomain = target.find(L'.') != std::wstring::npos || localAddress;
+        if (!looksLikeDomain) {
             std::wstring query = target;
             target = L"https://www.google.com/search?q=";
-            for (wchar_t ch : query) target += (ch == L' ') ? L'+' : ch;
+            for (wchar_t ch : query) {
+                if (ch == L' ') target += L'+';
+                else if (ch == L'&') target += L"%26";
+                else if (ch == L'#') target += L"%23";
+                else target += ch;
+            }
         } else {
-            target = L"https://" + target;
+            if (localAddress && target.find(L':') != std::wstring::npos) target = L"http://" + target;
+            else target = L"https://" + target;
         }
     }
     tab->url = target;
