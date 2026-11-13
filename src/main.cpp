@@ -291,6 +291,15 @@ void LayoutBrowser() {
     g_browserController->put_Bounds(bounds);
 }
 
+void LayoutWorkspace() {
+    if (!g_uiController || !g_hwnd) return;
+    RECT client{};
+    GetClientRect(g_hwnd, &client);
+    g_uiController->put_Bounds(client);
+    g_uiController->put_IsVisible(TRUE);
+}
+
+
 void SetBrowserVisible(bool visible) {
     g_browserVisible = visible;
     if (g_browserController) {
@@ -465,6 +474,10 @@ void EnsureWebViews() {
                             }
                             g_uiController = controller;
                             g_uiController->get_CoreWebView2(&g_uiView);
+                            // WM_SIZE can run before WebView2 finishes creating its controller.
+                            // Apply the client bounds here as well, otherwise the local UI can be
+                            // loaded into a zero-sized surface and the app appears as a blank page.
+                            LayoutWorkspace();
                             if (g_uiView) {
                                 g_uiView->add_WebMessageReceived(
                                     Callback<ICoreWebView2WebMessageReceivedEventHandler>(
@@ -479,7 +492,9 @@ void EnsureWebViews() {
                                 fs::path page = ExecutableDirectory() / L"assets" / L"ui" / L"index.html";
                                 std::vector<wchar_t> url(32768, L'\0');
                                 DWORD length = static_cast<DWORD>(url.size());
-                                if (SUCCEEDED(UrlCreateFromPathW(page.c_str(), url.data(), &length, 0))) {
+                                if (!fs::exists(page)) {
+                                    MessageBoxW(g_hwnd, L"PrivaLayer could not find assets\\ui\\index.html. Extract the complete ZIP and keep the assets folder beside PrivaLayer.exe.", kAppName, MB_ICONERROR);
+                                } else if (SUCCEEDED(UrlCreateFromPathW(page.c_str(), url.data(), &length, 0))) {
                                     g_uiView->add_NavigationCompleted(
                                         Callback<ICoreWebView2NavigationCompletedEventHandler>(
                                             [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
@@ -532,11 +547,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         return 0;
     }
     case WM_SIZE:
-        if (g_uiController) {
-            RECT client{};
-            GetClientRect(hwnd, &client);
-            g_uiController->put_Bounds(client);
-        }
+        LayoutWorkspace();
         LayoutBrowser();
         return 0;
     case WM_DPICHANGED: {
