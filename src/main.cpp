@@ -44,6 +44,7 @@ bool g_trayIconAdded = false;
 UINT g_taskbarCreatedMessage = 0;
 bool g_isTopmost = true;
 bool g_isPassthrough = false;
+bool g_sidebarCollapsed = false;
 int g_opacityValue = 96;
 std::wstring g_toggleHotkey = kDefaultToggleHotkey;
 std::wstring g_interactiveHotkey = kDefaultInteractiveHotkey;
@@ -264,7 +265,7 @@ void LayoutBrowser() {
     if (!g_browserController || !g_hwnd) return;
     RECT client{};
     GetClientRect(g_hwnd, &client);
-    RECT bounds{ 248, 160, std::max(270L, client.right - 22), std::max(180L, client.bottom - 22) };
+    RECT bounds{ g_sidebarCollapsed ? 76L : 248L, 160, std::max(g_sidebarCollapsed ? 96L : 270L, client.right - 22), std::max(180L, client.bottom - 22) };
     g_browserController->put_Bounds(bounds);
 }
 
@@ -405,6 +406,7 @@ void HandleWebMessage(const std::wstring& message) {
     else if (action == L"capture-start") StartWindowsSnip();
     else if (action == L"capture-import") ImportCapture();
     else if (action == L"capture-folder") OpenCaptureFolder();
+    else if (action == L"sidebar-collapsed" && parts.size() > 1) { g_sidebarCollapsed = parts[1] == L"1"; LayoutBrowser(); }
     else if (action == L"browser-show") SetBrowserVisible(true);
     else if (action == L"browser-hide") SetBrowserVisible(false);
     else if (action == L"browser-url" && parts.size() > 1) NavigateBrowser(parts[1]);
@@ -456,6 +458,16 @@ void EnsureWebViews() {
                                 std::vector<wchar_t> url(32768, L'\0');
                                 DWORD length = static_cast<DWORD>(url.size());
                                 if (SUCCEEDED(UrlCreateFromPathW(page.c_str(), url.data(), &length, 0))) {
+                                    g_uiView->add_NavigationCompleted(
+                                        Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                            [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
+                                                wchar_t state[512]{};
+                                                swprintf_s(state, L"native-settings|%d|%d|%d|%s|%s",
+                                                    g_opacityValue, g_isTopmost ? 1 : 0, g_isPassthrough ? 1 : 0,
+                                                    g_toggleHotkey.c_str(), g_interactiveHotkey.c_str());
+                                                PostToUi(state);
+                                                return S_OK;
+                                            }).Get(), nullptr);
                                     g_uiView->Navigate(url.data());
                                 } else {
                                     MessageBoxW(g_hwnd, L"PrivaLayer UI files are missing. Reinstall the complete application folder.", kAppName, MB_ICONERROR);
@@ -582,7 +594,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
         return 3;
     }
 
-    HWND hwnd = CreateWindowExW(WS_EX_APPWINDOW | WS_EX_LAYERED, kClassName,
+    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED, kClassName,
         L"PrivaLayer — Personal Workspace", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, 1460, 920, nullptr, nullptr, instance, nullptr);
     if (!hwnd) {
