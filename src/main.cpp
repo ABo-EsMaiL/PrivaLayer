@@ -508,7 +508,7 @@ void EnsureWebViews() {
                                         g_browserController = browserController;
                                         g_browserController->get_CoreWebView2(&g_browserView);
                                         LayoutBrowser();
-                                        g_browserController->put_IsVisible(FALSE);
+                                        g_browserController->put_IsVisible(g_browserVisible ? TRUE : FALSE);
                                         if (g_browserView) g_browserView->Navigate(L"https://aistudio.google.com/");
                                         return S_OK;
                                     }).Get());
@@ -597,7 +597,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     LoadSettings();
     HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) return 1;
+    if (FAILED(comResult)) return 1;
 
     Gdiplus::GdiplusStartupInput gdiplusInput;
     if (Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdiplusInput, nullptr) != Gdiplus::Ok) return 2;
