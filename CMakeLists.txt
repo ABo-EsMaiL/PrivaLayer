@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(PrivaLayer VERSION 0.1.0 LANGUAGES CXX RC)
+project(PrivaLayer VERSION 0.2.0 LANGUAGES CXX RC)
 
 if(NOT WIN32)
     message(FATAL_ERROR "PrivaLayer is a Windows desktop application. Build it on Windows with Visual Studio 2022.")
@@ -73,8 +73,6 @@ target_link_libraries(PrivaLayer PRIVATE
     User32
     Gdi32
 )
-
-target_link_options(PrivaLayer PRIVATE "/MANIFEST:NO")
 
 add_custom_command(TARGET PrivaLayer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PrivaLayer>/assets"

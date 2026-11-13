@@ -49,7 +49,13 @@ enum ControlId {
 };
 constexpr int HOTKEY_TOGGLE = 1;
 constexpr int HOTKEY_INTERACTIVE = 2;
-constexpr int HOTKEY_SNIP = 3;
+// Screen capture is intentionally started from the visible Capture button, not a
+// global shortcut that can collide with other applications.
+constexpr UINT WM_TRAY_CALLBACK = WM_APP + 41;
+constexpr UINT ID_TRAY_OPEN = 9101;
+constexpr UINT ID_TRAY_SETTINGS = 9102;
+constexpr UINT ID_TRAY_EXIT = 9103;
+constexpr UINT kTrayIconId = 1;
 
 struct Palette {
     COLORREF bg;
@@ -94,6 +100,9 @@ bool g_isPassthrough = false;
 bool g_isTopmost = true;
 ULONG_PTR g_gdiplusToken = 0;
 HICON g_appIcon = nullptr;
+NOTIFYICONDATAW g_trayData{};
+UINT g_taskbarCreatedMessage = 0;
+bool g_trayIconAdded = false;
 Gdiplus::Image* g_logo = nullptr;
 ComPtr<ICoreWebView2Environment> g_webEnvironment;
 ComPtr<ICoreWebView2Controller> g_webController;
@@ -244,6 +253,53 @@ void SetTopmost(bool enabled) {
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     if (g_topmost) SendMessageW(g_topmost, BM_SETCHECK, enabled ? BST_CHECKED : BST_UNCHECKED, 0);
     SaveSettings();
+}
+
+void AddTrayIcon(HWND hwnd) {
+    if (!hwnd || g_trayIconAdded) return;
+    g_trayData = {};
+    g_trayData.cbSize = sizeof(NOTIFYICONDATAW);
+    g_trayData.hWnd = hwnd;
+    g_trayData.uID = kTrayIconId;
+    g_trayData.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    g_trayData.uCallbackMessage = WM_TRAY_CALLBACK;
+    g_trayData.hIcon = g_appIcon ? g_appIcon : LoadIconW(nullptr, IDI_APPLICATION);
+    wcscpy_s(g_trayData.szTip, L"PrivaLayer — Personal Workspace");
+    g_trayIconAdded = Shell_NotifyIconW(NIM_ADD, &g_trayData) == TRUE;
+}
+
+void RemoveTrayIcon() {
+    if (!g_trayIconAdded) return;
+    Shell_NotifyIconW(NIM_DELETE, &g_trayData);
+    g_trayIconAdded = false;
+}
+
+void ShowMainWindow() {
+    if (!g_hwnd) return;
+    ShowWindow(g_hwnd, SW_SHOWNORMAL);
+    if (IsIconic(g_hwnd)) ShowWindow(g_hwnd, SW_RESTORE);
+    SetForegroundWindow(g_hwnd);
+}
+
+void ToggleMainWindow() {
+    if (!g_hwnd) return;
+    if (IsWindowVisible(g_hwnd)) ShowWindow(g_hwnd, SW_HIDE);
+    else ShowMainWindow();
+}
+
+void ShowTrayContextMenu(HWND hwnd) {
+    POINT pt{};
+    GetCursorPos(&pt);
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return;
+    AppendMenuW(menu, MF_STRING, ID_TRAY_OPEN, IsWindowVisible(hwnd) ? L"Hide PrivaLayer" : L"Open PrivaLayer");
+    AppendMenuW(menu, MF_STRING, ID_TRAY_SETTINGS, L"Settings");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"Exit");
+    SetForegroundWindow(hwnd);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hwnd, nullptr);
+    DestroyMenu(menu);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
 }
 
 void ShowPageControl(HWND h, bool show) {
@@ -619,7 +675,7 @@ void PaintMain(HWND hwnd) {
         DrawLabel(dc, L"HOTKEYS", kContentLeft, 482, p.muted, 8, true);
         DrawLabel(dc, L"Ctrl + Alt + Space   Show / hide window", kContentLeft, 510, p.text, 10);
         DrawLabel(dc, L"Ctrl + Alt + I           Toggle click-through mode", kContentLeft, 537, p.text, 10);
-        DrawLabel(dc, L"Ctrl + Alt + 1          Start Windows screen snip", kContentLeft, 564, p.text, 10);
+        DrawLabel(dc, L"Capture starts from the visible Capture button in AI Assistant.", kContentLeft, 564, p.text, 9);
         DrawLabel(dc, L"Note: PrivaLayer remains visible in normal screen sharing and recording.", kContentLeft, 620, p.muted, 8);
     }
     else if (g_page == PAGE_AI) {
@@ -647,14 +703,25 @@ void PaintMain(HWND hwnd) {
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (g_taskbarCreatedMessage && msg == g_taskbarCreatedMessage) {
+        g_trayIconAdded = false;
+        AddTrayIcon(hwnd);
+        return 0;
+    }
     switch (msg) {
     case WM_CREATE:
         CreateControls(hwnd);
         SetPassThrough(g_isPassthrough);
         RegisterHotKey(hwnd, HOTKEY_TOGGLE, MOD_CONTROL | MOD_ALT, VK_SPACE);
         RegisterHotKey(hwnd, HOTKEY_INTERACTIVE, MOD_CONTROL | MOD_ALT, 'I');
-        RegisterHotKey(hwnd, HOTKEY_SNIP, MOD_CONTROL | MOD_ALT, '1');
         SetTopmost(g_isTopmost);
+        return 0;
+    case WM_TRAY_CALLBACK:
+        if (LOWORD(lParam) == WM_LBUTTONUP || LOWORD(lParam) == WM_LBUTTONDBLCLK) {
+            ToggleMainWindow();
+        } else if (LOWORD(lParam) == WM_RBUTTONUP || LOWORD(lParam) == WM_CONTEXTMENU) {
+            ShowTrayContextMenu(hwnd);
+        }
         return 0;
     case WM_PAINT:
         PaintMain(hwnd);
@@ -674,14 +741,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (IsWindowVisible(hwnd)) { SetForegroundWindow(hwnd); }
         } else if (wParam == HOTKEY_INTERACTIVE) {
             SetPassThrough(!g_isPassthrough);
-        } else if (wParam == HOTKEY_SNIP) {
-            SetPage(PAGE_AI);
-            StartWindowsSnip();
         }
         return 0;
     case WM_COMMAND: {
         int id = LOWORD(wParam);
         switch (id) {
+            case ID_TRAY_OPEN: ToggleMainWindow(); break;
+            case ID_TRAY_SETTINGS: ShowMainWindow(); SetPage(PAGE_SETTINGS); break;
+            case ID_TRAY_EXIT: SaveNotes(); DestroyWindow(hwnd); break;
             case ID_NAV_HOME: SetPage(PAGE_HOME); break;
             case ID_NAV_NOTES: SetPage(PAGE_NOTES); break;
             case ID_NAV_BROWSER: SetPage(PAGE_BROWSER); break;
@@ -761,10 +828,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return reinterpret_cast<LRESULT>(staticBrush);
     }
     case WM_CLOSE:
-        SaveNotes(); DestroyWindow(hwnd); return 0;
+        SaveNotes();
+        if (g_trayIconAdded) {
+            ShowWindow(hwnd, SW_HIDE);
+        } else {
+            MessageBoxW(hwnd, L"The notification-area icon could not be created. Keep PrivaLayer open or exit from the process list.", kAppName, MB_ICONWARNING);
+        }
+        return 0;
     case WM_DESTROY:
-        UnregisterHotKey(hwnd, HOTKEY_TOGGLE); UnregisterHotKey(hwnd, HOTKEY_INTERACTIVE); UnregisterHotKey(hwnd, HOTKEY_SNIP);
-        PostQuitMessage(0); return 0;
+        RemoveTrayIcon();
+        UnregisterHotKey(hwnd, HOTKEY_TOGGLE);
+        UnregisterHotKey(hwnd, HOTKEY_INTERACTIVE);
+        PostQuitMessage(0);
+        return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -790,16 +866,19 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = CreateSolidBrush(kDark.bg);
     wc.lpszClassName = kClassName;
-    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(101));
-    wc.hIconSm = wc.hIcon;
+    g_appIcon = LoadIconW(instance, MAKEINTRESOURCEW(101));
+    wc.hIcon = g_appIcon;
+    wc.hIconSm = g_appIcon;
+    g_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
     if (!RegisterClassExW(&wc)) return 1;
 
-    DWORD exStyle = WS_EX_APPWINDOW | WS_EX_LAYERED;
+    DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_LAYERED;
     HWND hwnd = CreateWindowExW(exStyle, kClassName, L"PrivaLayer — Personal Workspace",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 790,
         nullptr, nullptr, instance, nullptr);
     if (!hwnd) return 2;
     g_hwnd = hwnd;
+    AddTrayIcon(hwnd);
     SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(wc.hIcon));
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(wc.hIcon));
     SetLayerOpacity();
