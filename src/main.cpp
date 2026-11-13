@@ -342,7 +342,7 @@ void LayoutBrowser() {
     RECT client{};
     GetClientRect(g_hwnd, &client);
     const LONG left = g_sidebarCollapsed ? 114L : 286L;
-    RECT bounds{ left, 226, std::max(left + 120L, client.right - 38L),
+    RECT bounds{ left, 270, std::max(left + 120L, client.right - 38L),
                  std::max(240L, client.bottom - 28L) };
     for (const auto& tab : g_browserTabs) {
         if (!tab || !tab->controller || tab->closed) continue;
@@ -395,7 +395,7 @@ void CreateBrowserTab(const std::wstring& initialUrl) {
     BrowserTab* raw = tab.get();
     g_browserTabs.push_back(std::move(tab));
     g_activeBrowserTabId = raw->id;
-    PostToUi(L"browser-tab-pending|" + std::to_wstring(raw->id) + L"|Loading…");
+    PostToUi(L"browser-tab-pending|" + std::to_wstring(raw->id) + L"|Loading");
     LayoutBrowser();
     g_webEnvironment->CreateCoreWebView2Controller(g_hwnd,
         Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
@@ -492,21 +492,6 @@ void LayoutWorkspace() {
     g_uiController->put_IsVisible(TRUE);
 }
 
-
-void SetBrowserVisible(bool visible) {
-    g_browserVisible = visible;
-    if (g_browserController) {
-        LayoutBrowser();
-        g_browserController->put_IsVisible(visible ? TRUE : FALSE);
-    }
-}
-
-void NavigateBrowser(const std::wstring& url) {
-    if (!g_browserView || url.empty()) return;
-    std::wstring target = url;
-    if (target.find(L"://") == std::wstring::npos) target = L"https://" + target;
-    g_browserView->Navigate(target.c_str());
-}
 
 std::wstring MakeCaptureName() {
     SYSTEMTIME time{};
@@ -662,6 +647,7 @@ void HandleWebMessage(const std::wstring& message) {
     else if (action == L"browser-switch" && parts.size() > 1) ActivateBrowserTab(_wtoi(parts[1].c_str()));
     else if (action == L"browser-close" && parts.size() > 1) CloseBrowserTab(_wtoi(parts[1].c_str()));
     else if (action == L"browser-url" && parts.size() > 2) NavigateBrowser(_wtoi(parts[1].c_str()), parts[2]);
+    else if (action == L"browser-url" && parts.size() > 1) NavigateBrowser(parts[1]);
     else if (action == L"browser-back" && parts.size() > 1) BrowserGoBack(_wtoi(parts[1].c_str()));
     else if (action == L"browser-forward" && parts.size() > 1) BrowserGoForward(_wtoi(parts[1].c_str()));
     else if (action == L"browser-reload" && parts.size() > 1) BrowserReload(_wtoi(parts[1].c_str()));
@@ -882,8 +868,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
         DispatchMessageW(&message);
     }
 
-    g_browserView.Reset();
-    g_browserController.Reset();
     g_uiView.Reset();
     g_uiController.Reset();
     g_webEnvironment.Reset();
