@@ -74,6 +74,8 @@ target_link_libraries(PrivaLayer PRIVATE
     Gdi32
 )
 
+target_link_options(PrivaLayer PRIVATE "/MANIFEST:NO")
+
 add_custom_command(TARGET PrivaLayer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PrivaLayer>/assets"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
