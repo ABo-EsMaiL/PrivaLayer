@@ -497,7 +497,21 @@ void EnsureWebViews() {
                                 } else if (SUCCEEDED(UrlCreateFromPathW(page.c_str(), url.data(), &length, 0))) {
                                     g_uiView->add_NavigationCompleted(
                                         Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                                            [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
+                                            [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                                LayoutWorkspace();
+                                                BOOL succeeded = FALSE;
+                                                COREWEBVIEW2_WEB_ERROR_STATUS errorStatus = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+                                                if (args) {
+                                                    args->get_IsSuccess(&succeeded);
+                                                    args->get_WebErrorStatus(&errorStatus);
+                                                }
+                                                if (!succeeded) {
+                                                    wchar_t details[256]{};
+                                                    swprintf_s(details, L"The PrivaLayer workspace page could not be loaded (WebView2 error %d). Check that assets\\ui\\index.html, styles.css and app.js are beside the EXE, and that Microsoft Edge WebView2 Runtime is installed.",
+                                                        static_cast<int>(errorStatus));
+                                                    MessageBoxW(g_hwnd, details, kAppName, MB_ICONERROR);
+                                                    return S_OK;
+                                                }
                                                 wchar_t state[512]{};
                                                 swprintf_s(state, L"native-settings|%d|%d|%d|%s|%s",
                                                     g_opacityValue, g_isTopmost ? 1 : 0, g_isPassthrough ? 1 : 0,
