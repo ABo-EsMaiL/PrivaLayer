@@ -53,7 +53,7 @@ function newBrowserTab(url='https://www.google.com/'){navigate('browser');send('
 function navigateAddress(){
  const tab=activeBrowser();if(!tab){newBrowserTab($('#browserAddress').value||'https://www.google.com/');return;}
  const url=$('#browserAddress').value.trim();if(!url)return;
- send('browser-url|'+activeBrowserTab+'|'+url.replace(/\\|/g,'%7C'));
+ send('browser-url|'+activeBrowserTab+'|'+url.replace(/\|/g,'%7C'));
  $('#browserAddress').blur();
 }
 $('#addressForm').addEventListener('submit',e=>{e.preventDefault();navigateAddress();});
