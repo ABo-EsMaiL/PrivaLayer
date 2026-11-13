@@ -3,7 +3,7 @@ const icons={grid:'<rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14"
 back:'<path d="m15 18-6-6 6-6"/>',forward:'<path d="m9 18 6-6-6-6"/>',
 refresh:'<path d="M20 7v5h-5"/><path d="M4.9 9a8 8 0 0 1 13.3-2L20 12M4 17v-5h5"/><path d="M19.1 15a8 8 0 0 1-13.3 2L4 12"/>',
 home:'<path d="m3 10 9-7 9 7"/><path d="M5 9v12h14V9M9 21v-7h6v7"/>',
-close:'<path d="m18 6-12 12M6 6l12 12"/>'};
+close:'<path d="m18 6-12 12M6 6l12 12"/>',play:'<path d="m8 5 12 7-12 7z"/>'};
 $$('[data-icon]').forEach(e=>{const p=icons[e.dataset.icon];if(p)e.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true">'+p+'</svg>';});
 const shell=$('#appShell');let page='home',collapsed=localStorage.getItem('pl-collapsed')==='1';
 // Compact Pomodoro timer. It runs independently of page navigation.
