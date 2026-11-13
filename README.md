@@ -1,89 +1,65 @@
-# PrivaLayer v0.2 — Personal Workspace
+# PrivaLayer — Personal Workspace
 
-نسخة أولية قابلة للبناء على Windows 10/11 باستخدام C++20 وWin32 API وMicrosoft WebView2.
+واجهة Windows حديثة مبنية بـ C++20 وWin32 API وMicrosoft WebView2. تجمع الملاحظات والبحث وأدوات تجهيز السياق للذكاء الاصطناعي في مساحة واحدة.
 
-## الموجود في النسخة الحالية
+## Features
 
-- واجهة Windows باسم وهوية PrivaLayer وأيقونة مخصصة.
-- أقسام Overview وNotes وBrowser وAI Assistant وWorkspace وSettings.
-- Notes تحفظ محليًا في `%LOCALAPPDATA%\PrivaLayer\notes.txt`.
-- متصفح مدمج باستخدام WebView2، مع مجلد بيانات مستقل لحفظ جلسات المواقع التي تسمح بتسجيل الدخول من WebView2.
-- زر يفتح Windows Snipping Tool عبر `Win + Shift + S`، لتختار بنفسك منطقة الشاشة.
-- زر يستورد صورة الـClipboard ويحفظها بصيغة PNG في `Pictures\PrivaLayer`.
-- زر يفتح Google AI Studio في Microsoft Edge؛ بعد فتحه الصق الصورة يدويًا باستخدام `Ctrl + V`.
-- إعدادات شفافية النافذة، إبقاؤها أعلى النوافذ، وضع تمرير النقرات، وثلاثة Themes.
-- أيقونة في منطقة الإشعارات مع قائمة لفتح البرنامج أو الإعدادات أو الخروج.
-- اختصارات عامة:
-  - `Ctrl + Alt + Space`: إظهار/إخفاء نافذة البرنامج.
-  - `Ctrl + Alt + I`: التبديل بين الوضع التفاعلي وتمرير النقرات.
-  - أزيل اختصار `Ctrl + Alt + 1` لتجنب التعارض؛ ابدأ القص من زر Capture داخل البرنامج.
+- واجهة محدثة: Overview, Notes, Browser, AI Assistant, Workspace, Preferences.
+- Notes متعددة مع بحث، إنشاء وحذف، وحفظ تلقائي محلي.
+- متصفح WebView2 مدمج داخل نافذة التطبيق. ملفه الشخصي مستقل عن Microsoft Edge.
+- AI Assistant لتجهيز Prompt ونسخ النص والتقاط منطقة محددة يدويًا بأداة Windows Snipping Tool ثم استيراد صورة Clipboard.
+- Preferences: ثلاث Themes، شفافية النافذة، إبقاء النافذة بالأعلى، Click-through، وإخفاء/طيّ Sidebar.
+- اختصارات عامة قابلة للتخصيص لإظهار/إخفاء النافذة وتبديل وضع التفاعل.
+- System Tray menu لإظهار التطبيق أو فتح Settings أو الخروج.
+- تُحفظ الملاحظات في تخزين WebView2 المحلي للتطبيق، وتُحفظ إعدادات النافذة والاختصارات في `%LOCALAPPDATA%\PrivaLayer\settings.ini`.
 
-## البناء
+## Build
 
-المتطلبات:
+يتوفر GitHub Actions workflow للبناء تلقائيًا على Windows x64 عند Push أو يدويًا من تبويب Actions باستخدام `workflow_dispatch`.
 
-1. Windows 10 إصدار 2004 أو أحدث، أو Windows 11.
-2. Visual Studio 2022 مع workload باسم **Desktop development with C++**.
+المتطلبات للبناء محليًا:
+1. Windows 10/11.
+2. Visual Studio 2022 مع Desktop development with C++.
 3. CMake 3.24 أو أحدث.
-4. اتصال إنترنت أثناء أول Configure لتنزيل WebView2 SDK من NuGet.
-5. وجود Microsoft Edge WebView2 Runtime على الجهاز لتشغيل المتصفح المدمج.
+4. اتصال إنترنت لأول Configure لتنزيل WebView2 SDK من NuGet.
 
-افتح PowerShell داخل مجلد المشروع ثم نفّذ:
+من PowerShell داخل مجلد المشروع:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\build.ps1
 ```
 
-أو بالأوامر المباشرة:
+الناتج: `build\Release\PrivaLayer.exe` مع مجلد `assets\ui` بجواره. يجب توزيع الـEXE ومجلد assets معًا.
 
-```powershell
-cmake -S . -B build -A x64
-cmake --build build --config Release --parallel
-```
+## GitHub Actions artifact
 
-المفترض أن يكون الملف الناتج:
+نزّل Artifact باسم `PrivaLayer-x64` من تشغيل Workflow ناجح، ثم فك الضغط وشغّل `PrivaLayer.exe`. احتفظ بمجلد `assets` بجوار الملف التنفيذي؛ يحتوي على ملفات الواجهة المحلية.
 
-```text
-build\Release\PrivaLayer.exe
-```
+## Shortcuts
 
-للتشغيل:
+الافتراضي:
+- `Ctrl + Alt + Space`: إظهار/إخفاء PrivaLayer.
+- `Ctrl + Alt + I`: تبديل Click-through.
 
-```powershell
-.\run.ps1
-```
+يمكن تغيير الاختصارات من Preferences → Keyboard shortcuts. يجب أن تتضمن كل تركيبة مفتاح تعديل واحدًا على الأقل، وأن تكون التركيبتان مختلفتين وغير مستخدمتين من تطبيق آخر.
 
-## التصوير وإرسال الصورة إلى AI Studio
+## Storage
 
-1. افتح قسم AI Assistant واضغط **Start screen snip**.
-2. حدد المنطقة بنفسك من واجهة Windows Snipping Tool.
-3. ارجع إلى PrivaLayer واضغط **Import clipboard image**.
-4. سيحفظ البرنامج PNG محليًا، مع إبقاء صورة القص في Clipboard.
-5. اضغط **Open AI Studio in Edge**، ثم الصق الصورة باستخدام `Ctrl + V`.
+- إعدادات النافذة والاختصارات: `%LOCALAPPDATA%\PrivaLayer\settings.ini`
+- Notes وتفضيلات الواجهة: تخزين WebView2 المحلي في مجلد `%LOCALAPPDATA%\PrivaLayer\WebView2Data`.
+- الصور المستوردة: `%USERPROFILE%\Pictures\PrivaLayer\`
 
-لا ينفذ البرنامج تصويرًا دوريًا أو رفعًا في الخلفية. اختيار المنطقة والإرسال إلى AI Studio يتطلبان إجراءً مباشرًا منك.
+## Browser profile
 
-## حدود مهمة قبل الاستخدام
+المتصفح المدمج يستخدم WebView2 profile منفصلًا عن Microsoft Edge. قد ترفض بعض المواقع تسجيل الدخول داخل WebView2؛ لا تنتقل جلسة Edge تلقائيًا إلى هذا المتصفح.
 
-- هذه النسخة لا تستخدم `WDA_EXCLUDEFROMCAPTURE` ولا تحاول إخفاء واجهة البرنامج من برامج الاجتماعات أو التسجيل. ستظهر النافذة في مشاركة الشاشة العادية إذا كانت ظاهرة على الشاشة المشتركة.
-- الشفافية وPass-through لا تعنيان إخفاء النافذة من Screen Sharing.
-- المتصفح المدمج WebView2 له Profile مستقل عن Edge. بعض المواقع، ومنها تدفقات تسجيل الدخول الخاصة بخدمات Google، قد تمنع تسجيل الدخول داخل WebView2. لذلك يوجد زر لفتح AI Studio في Edge العادي.
-- زر الصورة يستعمل أداة القص الرسمية في Windows ويحتاج اختيارًا يدويًا؛ لا يقوم بالتقاط الشاشة سرًا.
-- AI Assistant في هذه النسخة هو مساحة تجهيز Prompt وفتح AI Studio، وليس اتصال API مستقلًا.
-- المشروع مصدر C++ قابل للبناء، ولم يتم إنتاج EXE داخل بيئة التطوير الحالية لأنها ليست Windows ولا تحتوي على MSVC. يلزم تنفيذ أوامر البناء على جهاز Windows بالمواصفات أعلاه.
+## Capture and screen sharing
 
-## أماكن الملفات المحلية
+التقاط الشاشة يبدأ فقط عندما تضغط زر Capture، ويستخدم واجهة Windows الرسمية لتحديد المنطقة يدويًا. بعد انتهاء القص ارجع إلى PrivaLayer واضغط Import. لا توجد لقطات تلقائية أو رفع للصور في الخلفية.
 
-- Notes وبيانات المتصفح: `%LOCALAPPDATA%\PrivaLayer\`
-- الصور المحفوظة: `%USERPROFILE%\Pictures\PrivaLayer\`
+الشفافية وClick-through لا تضمنان استبعاد النافذة من كل برامج الاجتماعات أو التسجيل أو Remote Desktop. تختلف طرق الالتقاط من تطبيق لآخر؛ اختبر السلوك مع برنامج المشاركة الذي تستخدمه. لا يُقدّم التطبيق ضمان إخفاء مطلقًا.
 
+## Notes about the AI assistant
 
-## ملاحظات إصدار v0.2
-
-- إضافة System Tray icon وقائمة يمين الماوس (Open / Settings / Exit).
-- منع ظهور نافذة التطبيق كزر مستقل في شريط المهام باستخدام `WS_EX_TOOLWINDOW`.
-- زر الإغلاق يخفي التطبيق إلى منطقة الإشعارات، ولا ينهيه.
-- حذف اختصار القص العام `Ctrl + Alt + 1` لتجنب التعارض مع برامج أخرى.
-
-ملاحظة: ويندوز هو الذي يقرر هل تظهر أيقونة البرنامج مباشرة بجوار الساعة أم داخل قائمة الأيقونات المخفية (السهم ^). يمكن للمستخدم تغيير ذلك من إعدادات شريط المهام > Other system tray icons.
+AI Assistant مساحة لتجهيز Prompt وإدارة لقطة شاشة ثم فتح AI Studio في المتصفح المدمج. لا يوجد اتصال API مستقل أو إرسال تلقائي للنصوص والصور إلى Gemini؛ الإرسال يتم يدويًا من داخل الموقع.
