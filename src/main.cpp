@@ -2,6 +2,7 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <shellapi.h>
+#include <Shlwapi.h>
 #include <shlobj.h>
 #include <gdiplus.h>
 #include <wrl.h>
@@ -86,6 +87,31 @@ fs::path CaptureFolder() {
     fs::create_directories(path, ec);
     return path;
 }
+fs::path LegacyNotesPath() { return AppDataPath() / L"notes.txt"; }
+
+std::wstring ReadLegacyNotes() {
+    HANDLE file = CreateFileW(LegacyNotesPath().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return {};
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size) || size.QuadPart < 2 || size.QuadPart > 8 * 1024 * 1024) {
+        CloseHandle(file);
+        return {};
+    }
+    std::vector<BYTE> bytes(static_cast<size_t>(size.QuadPart));
+    DWORD read = 0;
+    ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr);
+    CloseHandle(file);
+    bytes.resize(read);
+    if (bytes.size() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+        size_t chars = (bytes.size() - 2) / sizeof(wchar_t);
+        std::wstring result(chars, L'\\0');
+        if (chars) memcpy(result.data(), bytes.data() + 2, chars * sizeof(wchar_t));
+        return result;
+    }
+    return {};
+}
+
 fs::path ExecutableDirectory() {
     std::vector<wchar_t> buffer(32768, L'\0');
     DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
@@ -156,8 +182,8 @@ bool ParseHotkey(const std::wstring& specification, UINT& modifiers, UINT& key) 
     bool hasModifier = false;
     bool hasKey = false;
     for (std::wstring token : Split(specification, L'+')) {
-        token.erase(std::remove_if(token.begin(), token.end(), iswspace), token.end());
-        std::transform(token.begin(), token.end(), token.begin(), towupper);
+        token.erase(std::remove_if(token.begin(), token.end(), [](wchar_t ch) { return std::iswspace(ch) != 0; }), token.end());
+        std::transform(token.begin(), token.end(), token.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towupper(ch)); });
         if (token == L"CTRL" || token == L"CONTROL") { modifiers |= MOD_CONTROL; hasModifier = true; }
         else if (token == L"ALT") { modifiers |= MOD_ALT; hasModifier = true; }
         else if (token == L"SHIFT") { modifiers |= MOD_SHIFT; hasModifier = true; }
@@ -466,6 +492,8 @@ void EnsureWebViews() {
                                                     g_opacityValue, g_isTopmost ? 1 : 0, g_isPassthrough ? 1 : 0,
                                                     g_toggleHotkey.c_str(), g_interactiveHotkey.c_str());
                                                 PostToUi(state);
+                                                std::wstring oldNote = ReadLegacyNotes();
+                                                if (!oldNote.empty()) PostToUi(std::wstring(L"legacy-note|") + oldNote);
                                                 return S_OK;
                                             }).Get(), nullptr);
                                     g_uiView->Navigate(url.data());
