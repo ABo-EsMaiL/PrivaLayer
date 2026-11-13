@@ -18,6 +18,19 @@
 <div class="tool-grid"><button class="tool-card" data-go="notes"><div class="tool-top"><span class="tool-symbol purple" data-icon="note"></span><span data-icon="arrow-up-right"></span></div><small>01 / THINK</small><h3>Notes</h3><p>Capture ideas before they disappear.</p><div class="tool-foot"><span id="homeNotesCount">0 notes saved</span><i></i></div></button>
 <button class="tool-card" data-go="browser"><div class="tool-top"><span class="tool-symbol teal" data-icon="globe"></span><span data-icon="arrow-up-right"></span></div><small>02 / EXPLORE</small><h3>Browser</h3><p>Research without leaving your space.</p><div class="tool-foot"><span>WebView2 integrated</span><i></i></div></button>
 <button class="tool-card" data-go="assistant"><div class="tool-top"><span class="tool-symbol violet" data-icon="spark"></span><span data-icon="arrow-up-right"></span></div><small>03 / CREATE</small><h3>AI assistant</h3><p>Bring a clearer prompt to every idea.</p><div class="tool-foot"><span>Prompt &amp; capture tools</span><i></i></div></button></div>
+<div class="home-bottom-grid">
+<section class="focus-widget">
+ <div class="focus-top"><div><div class="eyebrow muted">FOCUS SESSION</div><h2>One thing at a time.</h2><p>Take 25 minutes. Make meaningful progress.</p></div><span class="focus-live"><i></i> DEEP WORK</span></div>
+ <div class="focus-center"><div class="focus-ring" id="focusRing"><div><strong id="focusTime">25:00</strong><small id="focusStatus">READY TO FOCUS</small></div></div>
+ <div class="focus-controls"><button class="btn primary" id="focusStart"><span data-icon="play"></span> Start focus</button><button class="btn outline" id="focusReset" title="Reset timer"><span data-icon="refresh"></span> Reset</button></div>
+ <div class="focus-tip"><span data-icon="spark"></span><span id="focusTip">Silence the noise. Pick one task. Begin.</span></div></div>
+</section>
+<section class="quick-panel">
+ <div class="eyebrow muted">QUICK ACTIONS</div><h3>Keep your momentum.</h3>
+ <button class="quick-action" data-go="notes"><span class="quick-action-icon purple" data-icon="note"></span><span><b>Write a thought</b><small>Capture it in Notes</small></span><span class="quick-arrow" data-icon="arrow-up-right"></span></button>
+ <button class="quick-action" data-go="browser"><span class="quick-action-icon teal" data-icon="globe"></span><span><b>Explore the web</b><small>Open your browser</small></span><span class="quick-arrow" data-icon="arrow-up-right"></span></button>
+ <button class="quick-action" id="quickCaptureHome"><span class="quick-action-icon violet" data-icon="scan"></span><span><b>Capture desktop</b><small>Save and copy screenshot</small></span><span class="quick-arrow" data-icon="arrow-up-right"></span></button>
+</section></div>
 <div class="bottom-strip"><span class="strip-icon" data-icon="command"></span><div><b>Your flow, your shortcuts</b><small>Open or hide PrivaLayer instantly with your own keyboard combinations.</small></div><button class="btn outline" data-go="settings">Configure shortcuts <span data-icon="arrow-right"></span></button></div></section>
 <section class="page" id="page-notes"><div class="page-head"><div><div class="eyebrow muted">THINKING SPACE</div><h1>Notes <span class="count" id="notesHeadingCount">0</span></h1><p>Your ideas, organized and always within reach.</p></div><button class="btn primary" id="createNote"><span data-icon="plus"></span> New note</button></div>
 <div class="notes-layout"><div class="notes-panel"><div class="notes-toolbar"><b>ALL NOTES <i id="listCount">00</i></b><label class="search"><span data-icon="search"></span><input id="noteSearch" placeholder="Search notes…"></label></div><div class="notes-list" id="notesList"></div><div class="notes-foot"><i></i> Saved locally on this device</div></div>

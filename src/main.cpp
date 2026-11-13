@@ -3,6 +3,7 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <Shlwapi.h>
+#include <dwmapi.h>
 #include <shlobj.h>
 #include <gdiplus.h>
 #include <wrl.h>
@@ -21,6 +22,7 @@
 #pragma comment(lib, "Shell32.lib")
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "Shlwapi.lib")
+#pragma comment(lib, "Dwmapi.lib")
 
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
@@ -56,6 +58,7 @@ std::wstring g_captureHotkey = kDefaultCaptureHotkey;
 std::wstring g_lastCapturePath;
 ULONG_PTR g_gdiplusToken = 0;
 
+HWND g_browserHostHwnd = nullptr;
 ComPtr<ICoreWebView2Environment> g_webEnvironment;
 ComPtr<ICoreWebView2Controller> g_uiController;
 ComPtr<ICoreWebView2> g_uiView;
@@ -338,15 +341,26 @@ void PostBrowserTabState(const BrowserTab* tab) {
 }
 
 void LayoutBrowser() {
-    if (!g_hwnd) return;
+    if (!g_hwnd || !g_browserHostHwnd) return;
     RECT client{};
     GetClientRect(g_hwnd, &client);
     const LONG left = g_sidebarCollapsed ? 114L : 286L;
-    RECT bounds{ left, 280, std::max(left + 120L, client.right - 38L),
-                 std::max(240L, client.bottom - 28L) };
+    const LONG top = 280L;
+    const LONG right = std::max(left + 120L, client.right - 38L);
+    const LONG bottom = std::max(top + 160L, client.bottom - 54L);
+    const int width = static_cast<int>(right - left);
+    const int height = static_cast<int>(bottom - top);
+
+    // Keep the real browser content in its own child window above the
+    // full-window workspace WebView2 surface.
+    SetWindowPos(g_browserHostHwnd, HWND_TOP, left, top, width, height,
+        SWP_NOACTIVATE);
+    ShowWindow(g_browserHostHwnd, g_browserVisible ? SW_SHOWNA : SW_HIDE);
+
+    RECT tabBounds{ 0, 0, width, height };
     for (const auto& tab : g_browserTabs) {
         if (!tab || !tab->controller || tab->closed) continue;
-        tab->controller->put_Bounds(bounds);
+        tab->controller->put_Bounds(tabBounds);
         tab->controller->put_IsVisible(g_browserVisible && tab->id == g_activeBrowserTabId ? TRUE : FALSE);
     }
 }
@@ -397,7 +411,7 @@ void NavigateBrowser(const std::wstring& url) {
 }
 
 void CreateBrowserTab(const std::wstring& initialUrl) {
-    if (!g_webEnvironment || !g_hwnd) return;
+    if (!g_webEnvironment || !g_hwnd || !g_browserHostHwnd) return;
     auto tab = std::make_unique<BrowserTab>();
     tab->id = g_nextBrowserTabId++;
     tab->url = initialUrl.empty() ? L"about:blank" : initialUrl;
@@ -407,7 +421,7 @@ void CreateBrowserTab(const std::wstring& initialUrl) {
     g_activeBrowserTabId = raw->id;
     PostToUi(L"browser-tab-pending|" + std::to_wstring(raw->id) + L"|Loading");
     LayoutBrowser();
-    g_webEnvironment->CreateCoreWebView2Controller(g_hwnd,
+    g_webEnvironment->CreateCoreWebView2Controller(g_browserHostHwnd,
         Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
             [raw](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                 if (FAILED(result) || !controller || raw->closed) {
@@ -451,6 +465,10 @@ void CreateBrowserTab(const std::wstring& initialUrl) {
                             PostBrowserTabState(raw);
                             return S_OK;
                         }).Get(), nullptr);
+                RECT hostRect{};
+                GetClientRect(g_browserHostHwnd, &hostRect);
+                RECT localBounds{ 0, 0, hostRect.right, hostRect.bottom };
+                raw->controller->put_Bounds(localBounds);
                 LayoutBrowser();
                 raw->controller->put_IsVisible(g_browserVisible && raw->id == g_activeBrowserTabId ? TRUE : FALSE);
                 raw->view->Navigate(raw->url.c_str());
@@ -564,6 +582,20 @@ HGLOBAL CreateDibClipboardBlock(HBITMAP bitmap, HDC screenDc) {
 }
 
 void CaptureScreenNow() {
+    // Hide PrivaLayer before sampling the desktop so its own UI is not in the image.
+    const bool restoreWindow = g_hwnd && IsWindowVisible(g_hwnd) != FALSE;
+    if (restoreWindow) {
+        ShowWindow(g_hwnd, SW_HIDE);
+        DwmFlush();
+    }
+    struct RestoreCaptureWindow {
+        HWND hwnd;
+        bool restore;
+        ~RestoreCaptureWindow() {
+            if (restore && hwnd && IsWindow(hwnd)) ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
+    } restoreGuard{ g_hwnd, restoreWindow };
+
     const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
     const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
     const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
@@ -604,12 +636,18 @@ void CaptureScreenNow() {
     HGLOBAL dib = saved ? CreateDibClipboardBlock(bitmap, screenDc) : nullptr;
     HBITMAP clipboardBitmap = saved ? static_cast<HBITMAP>(CopyImage(bitmap, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION)) : nullptr;
     bool copiedToClipboard = false;
-    if (saved && dib && clipboardBitmap && OpenClipboard(g_hwnd)) {
+    if (saved && (dib || clipboardBitmap) && OpenClipboard(g_hwnd)) {
         EmptyClipboard();
-        HANDLE dibResult = SetClipboardData(CF_DIB, dib);
-        if (dibResult) dib = nullptr;
-        HANDLE bitmapResult = SetClipboardData(CF_BITMAP, clipboardBitmap);
-        if (bitmapResult) clipboardBitmap = nullptr;
+        HANDLE dibResult = nullptr;
+        HANDLE bitmapResult = nullptr;
+        if (dib) {
+            dibResult = SetClipboardData(CF_DIB, dib);
+            if (dibResult) dib = nullptr;
+        }
+        if (clipboardBitmap) {
+            bitmapResult = SetClipboardData(CF_BITMAP, clipboardBitmap);
+            if (bitmapResult) clipboardBitmap = nullptr;
+        }
         CloseClipboard();
         copiedToClipboard = dibResult != nullptr || bitmapResult != nullptr;
     }
@@ -756,7 +794,16 @@ void EnsureWebViews() {
                                     MessageBoxW(g_hwnd, L"PrivaLayer UI files are missing. Reinstall the complete application folder.", kAppName, MB_ICONERROR);
                                 }
                             }
-                            CreateBrowserTab(L"https://www.google.com/");
+                            g_browserHostHwnd = CreateWindowExW(
+                                0, L"STATIC", L"",
+                                WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                                0, 0, 1, 1, g_hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+                            if (!g_browserHostHwnd) {
+                                MessageBoxW(g_hwnd, L"PrivaLayer could not create its browser content surface.", kAppName, MB_ICONERROR);
+                            } else {
+                                LayoutBrowser();
+                                CreateBrowserTab(L"https://www.google.com/");
+                            }
                             return S_OK;
                         }).Get());
                 return S_OK;
@@ -831,6 +878,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         UnregisterHotKey(hwnd, HOTKEY_CAPTURE);
         for (const auto& tab : g_browserTabs) {
             if (tab && tab->controller) tab->controller->Close();
+        }
+        if (g_browserHostHwnd) {
+            DestroyWindow(g_browserHostHwnd);
+            g_browserHostHwnd = nullptr;
         }
         if (g_uiController) g_uiController->Close();
         PostQuitMessage(0);
