@@ -188,6 +188,8 @@ void SetPassThrough(bool enabled) {
     SaveInteger(L"Window", L"PassThrough", enabled ? 1 : 0);
 }
 
+void PostToUi(const std::wstring& message);
+
 void SetCaptureExclusion(bool enabled) {
     g_captureExclusionEnabled = enabled;
     BOOL applied = FALSE;
