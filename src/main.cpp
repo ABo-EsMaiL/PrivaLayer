@@ -1,22 +1,19 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
-#include <shlobj.h>
 #include <shellapi.h>
+#include <Shlwapi.h>
+#include <shlobj.h>
 #include <gdiplus.h>
 #include <wrl.h>
 #include <WebView2.h>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
-#include <chrono>
-#include <iomanip>
 #include <algorithm>
+#include <cwctype>
 #include <cstdlib>
 #include <cstring>
-#include <cwchar>
 
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "Gdiplus.lib")
@@ -31,228 +28,213 @@ namespace fs = std::filesystem;
 namespace {
 constexpr wchar_t kClassName[] = L"PrivaLayerMainWindow";
 constexpr wchar_t kAppName[] = L"PrivaLayer";
-constexpr int kSidebarWidth = 206;
-constexpr int kHeaderHeight = 78;
-constexpr int kContentLeft = 232;
-constexpr int kContentTop = 112;
-constexpr int kControlWidth = 790;
-
-enum Page { PAGE_HOME = 0, PAGE_NOTES, PAGE_BROWSER, PAGE_AI, PAGE_WORKSPACE, PAGE_SETTINGS };
-enum ControlId {
-    ID_NAV_HOME = 100, ID_NAV_NOTES, ID_NAV_BROWSER, ID_NAV_AI, ID_NAV_WORKSPACE, ID_NAV_SETTINGS,
-    ID_NOTES_EDIT = 200, ID_NOTES_SAVE,
-    ID_URL_EDIT = 300, ID_BROWSER_GO, ID_BROWSER_BACK, ID_BROWSER_FORWARD,
-    ID_AI_PROMPT = 400, ID_AI_COPY_PROMPT, ID_AI_START_SNIP, ID_AI_IMPORT_CAPTURE, ID_AI_OPEN_STUDIO,
-    ID_SETTINGS_OPACITY = 500, ID_SETTINGS_TOPMOST, ID_SETTINGS_PASSTHROUGH, ID_SETTINGS_THEME,
-    ID_WORK_OPEN_NOTES = 600, ID_WORK_OPEN_BROWSER, ID_WORK_OPEN_AI,
-    ID_CAPTURE_OPEN_FOLDER = 700
-};
-constexpr int HOTKEY_TOGGLE = 1;
-constexpr int HOTKEY_INTERACTIVE = 2;
-// Screen capture is intentionally started from the visible Capture button, not a
-// global shortcut that can collide with other applications.
 constexpr UINT WM_TRAY_CALLBACK = WM_APP + 41;
 constexpr UINT ID_TRAY_OPEN = 9101;
 constexpr UINT ID_TRAY_SETTINGS = 9102;
 constexpr UINT ID_TRAY_EXIT = 9103;
 constexpr UINT kTrayIconId = 1;
-
-struct Palette {
-    COLORREF bg;
-    COLORREF sidebar;
-    COLORREF panel;
-    COLORREF panel2;
-    COLORREF text;
-    COLORREF muted;
-    COLORREF accent;
-    COLORREF accent2;
-    COLORREF border;
-};
-const Palette kDark{ RGB(12,16,28), RGB(15,21,36), RGB(21,29,48), RGB(29,39,62), RGB(239,244,255), RGB(151,165,190), RGB(44,155,240), RGB(67,211,220), RGB(44,60,88) };
-const Palette kPurple{ RGB(17,14,31), RGB(22,18,40), RGB(31,25,54), RGB(43,34,72), RGB(245,241,255), RGB(174,163,202), RGB(139,105,255), RGB(53,190,219), RGB(66,53,96) };
-const Palette kLight{ RGB(242,246,252), RGB(230,237,248), RGB(255,255,255), RGB(236,242,250), RGB(25,34,51), RGB(93,108,132), RGB(20,112,204), RGB(20,155,163), RGB(205,216,232) };
+constexpr int HOTKEY_TOGGLE = 1;
+constexpr int HOTKEY_INTERACTIVE = 2;
+constexpr wchar_t kDefaultToggleHotkey[] = L"CTRL+ALT+SPACE";
+constexpr wchar_t kDefaultInteractiveHotkey[] = L"CTRL+ALT+I";
 
 HWND g_hwnd = nullptr;
-HWND g_notesEdit = nullptr;
-HWND g_notesSave = nullptr;
-HWND g_urlEdit = nullptr;
-HWND g_browserGo = nullptr;
-HWND g_browserBack = nullptr;
-HWND g_browserForward = nullptr;
-HWND g_aiPrompt = nullptr;
-HWND g_aiCopy = nullptr;
-HWND g_aiSnip = nullptr;
-HWND g_aiImport = nullptr;
-HWND g_aiOpenStudio = nullptr;
-HWND g_opacity = nullptr;
-HWND g_topmost = nullptr;
-HWND g_passthrough = nullptr;
-HWND g_theme = nullptr;
-HWND g_workNotes = nullptr;
-HWND g_workBrowser = nullptr;
-HWND g_workAI = nullptr;
-HWND g_openCaptureFolder = nullptr;
-std::vector<HWND> g_navButtons;
-Page g_page = PAGE_HOME;
-int g_opacityValue = 94;
-int g_themeIndex = 0;
-bool g_isPassthrough = false;
-bool g_isTopmost = true;
-ULONG_PTR g_gdiplusToken = 0;
 HICON g_appIcon = nullptr;
 NOTIFYICONDATAW g_trayData{};
-UINT g_taskbarCreatedMessage = 0;
 bool g_trayIconAdded = false;
-Gdiplus::Image* g_logo = nullptr;
-ComPtr<ICoreWebView2Environment> g_webEnvironment;
-ComPtr<ICoreWebView2Controller> g_webController;
-ComPtr<ICoreWebView2> g_webView;
-bool g_webInitStarted = false;
+UINT g_taskbarCreatedMessage = 0;
+bool g_isTopmost = true;
+bool g_isPassthrough = false;
+bool g_sidebarCollapsed = false;
+int g_opacityValue = 96;
+std::wstring g_toggleHotkey = kDefaultToggleHotkey;
+std::wstring g_interactiveHotkey = kDefaultInteractiveHotkey;
 std::wstring g_lastCapturePath;
+ULONG_PTR g_gdiplusToken = 0;
 
-const Palette& CurrentPalette() {
-    if (g_themeIndex == 1) return kPurple;
-    if (g_themeIndex == 2) return kLight;
-    return kDark;
-}
+ComPtr<ICoreWebView2Environment> g_webEnvironment;
+ComPtr<ICoreWebView2Controller> g_uiController;
+ComPtr<ICoreWebView2> g_uiView;
+ComPtr<ICoreWebView2Controller> g_browserController;
+ComPtr<ICoreWebView2> g_browserView;
+bool g_browserVisible = false;
 
 std::wstring GetKnownFolder(REFKNOWNFOLDERID id) {
     PWSTR raw = nullptr;
     if (FAILED(SHGetKnownFolderPath(id, KF_FLAG_CREATE, nullptr, &raw)) || !raw) return L".";
-    std::wstring result(raw);
+    std::wstring value(raw);
     CoTaskMemFree(raw);
-    return result;
+    return value;
+}
+
+fs::path AppDataPath() {
+    fs::path path = fs::path(GetKnownFolder(FOLDERID_LocalAppData)) / L"PrivaLayer";
+    std::error_code ec;
+    fs::create_directories(path, ec);
+    return path;
+}
+
+fs::path SettingsPath() { return AppDataPath() / L"settings.ini"; }
+fs::path BrowserDataPath() {
+    fs::path path = AppDataPath() / L"WebView2Data";
+    std::error_code ec;
+    fs::create_directories(path, ec);
+    return path;
+}
+fs::path CaptureFolder() {
+    fs::path path = fs::path(GetKnownFolder(FOLDERID_Pictures)) / L"PrivaLayer";
+    std::error_code ec;
+    fs::create_directories(path, ec);
+    return path;
+}
+fs::path LegacyNotesPath() { return AppDataPath() / L"notes.txt"; }
+
+std::wstring ReadLegacyNotes() {
+    HANDLE file = CreateFileW(LegacyNotesPath().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return {};
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size) || size.QuadPart < 2 || size.QuadPart > 8 * 1024 * 1024) {
+        CloseHandle(file);
+        return {};
+    }
+    std::vector<BYTE> bytes(static_cast<size_t>(size.QuadPart));
+    DWORD read = 0;
+    ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr);
+    CloseHandle(file);
+    bytes.resize(read);
+    if (bytes.size() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+        size_t chars = (bytes.size() - 2) / sizeof(wchar_t);
+        std::wstring result(chars, L'\0');
+        if (chars) memcpy(result.data(), bytes.data() + 2, chars * sizeof(wchar_t));
+        return result;
+    }
+    return {};
 }
 
 fs::path ExecutableDirectory() {
     std::vector<wchar_t> buffer(32768, L'\0');
     DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (length == 0 || length >= buffer.size()) return fs::current_path();
+    if (!length || length >= buffer.size()) return fs::current_path();
     return fs::path(std::wstring(buffer.data(), length)).parent_path();
 }
 
-fs::path AppDataPath() {
-    fs::path p = fs::path(GetKnownFolder(FOLDERID_LocalAppData)) / L"PrivaLayer";
-    std::error_code ec;
-    fs::create_directories(p, ec);
-    return p;
-}
-
-fs::path NotesPath() { return AppDataPath() / L"notes.txt"; }
-fs::path SettingsPath() { return AppDataPath() / L"settings.ini"; }
-
 void LoadSettings() {
     const std::wstring path = SettingsPath().wstring();
-    g_opacityValue = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Appearance", L"Opacity", 94, path.c_str())), 40, 100);
-    g_themeIndex = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Appearance", L"Theme", 0, path.c_str())), 0, 2);
+    g_opacityValue = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Appearance", L"Opacity", 96, path.c_str())), 45, 100);
     g_isTopmost = GetPrivateProfileIntW(L"Window", L"Topmost", 1, path.c_str()) != 0;
     g_isPassthrough = GetPrivateProfileIntW(L"Window", L"PassThrough", 0, path.c_str()) != 0;
+    wchar_t value[128]{};
+    GetPrivateProfileStringW(L"Hotkeys", L"Toggle", kDefaultToggleHotkey, value, 128, path.c_str());
+    g_toggleHotkey = value;
+    GetPrivateProfileStringW(L"Hotkeys", L"Interactive", kDefaultInteractiveHotkey, value, 128, path.c_str());
+    g_interactiveHotkey = value;
 }
 
-void SaveSettings() {
-    const std::wstring path = SettingsPath().wstring();
-    wchar_t value[16]{};
-    swprintf_s(value, L"%d", g_opacityValue);
-    WritePrivateProfileStringW(L"Appearance", L"Opacity", value, path.c_str());
-    swprintf_s(value, L"%d", g_themeIndex);
-    WritePrivateProfileStringW(L"Appearance", L"Theme", value, path.c_str());
-    WritePrivateProfileStringW(L"Window", L"Topmost", g_isTopmost ? L"1" : L"0", path.c_str());
-    WritePrivateProfileStringW(L"Window", L"PassThrough", g_isPassthrough ? L"1" : L"0", path.c_str());
-}
-fs::path BrowserDataPath() {
-    fs::path p = AppDataPath() / L"WebView2Data";
-    std::error_code ec;
-    fs::create_directories(p, ec);
-    return p;
-}
-fs::path CaptureFolder() {
-    fs::path p = fs::path(GetKnownFolder(FOLDERID_Pictures)) / L"PrivaLayer";
-    std::error_code ec;
-    fs::create_directories(p, ec);
-    return p;
+void SaveInteger(const wchar_t* section, const wchar_t* key, int value) {
+    wchar_t buffer[24]{};
+    swprintf_s(buffer, L"%d", value);
+    WritePrivateProfileStringW(section, key, buffer, SettingsPath().c_str());
 }
 
-HFONT MakeFont(int points, bool bold = false) {
-    HDC hdc = GetDC(nullptr);
-    int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(nullptr, hdc);
-    return CreateFontW(-MulDiv(points, dpi, 72), 0, 0, 0, bold ? FW_SEMIBOLD : FW_NORMAL,
-        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable");
-}
-
-HFONT g_font = nullptr;
-HFONT g_fontBold = nullptr;
-
-void SetControlFont(HWND control, HFONT font = nullptr) {
-    if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font ? font : g_font), TRUE);
-}
-
-HWND MakeChild(DWORD exStyle, const wchar_t* cls, const wchar_t* text, DWORD style,
-               int x, int y, int w, int h, int id, HWND parent = nullptr) {
-    HWND control = CreateWindowExW(exStyle, cls, text, style, x, y, w, h,
-        parent ? parent : g_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
-    if (control) SetControlFont(control);
-    return control;
-}
-
-void SaveNotes() {
-    if (!g_notesEdit) return;
-    int len = GetWindowTextLengthW(g_notesEdit);
-    std::wstring text(static_cast<size_t>(std::max(0, len)) + 1, L'\0');
-    if (len > 0) GetWindowTextW(g_notesEdit, text.data(), len + 1);
-    text.resize(static_cast<size_t>(std::max(0, len)));
-    HANDLE file = CreateFileW(NotesPath().c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return;
-    const WORD bom = 0xFEFF;
-    DWORD written = 0;
-    WriteFile(file, &bom, sizeof(bom), &written, nullptr);
-    if (!text.empty()) WriteFile(file, text.data(), static_cast<DWORD>(text.size() * sizeof(wchar_t)), &written, nullptr);
-    CloseHandle(file);
-}
-
-void LoadNotes() {
-    if (!g_notesEdit) return;
-    HANDLE file = CreateFileW(NotesPath().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return;
-    LARGE_INTEGER size{};
-    if (!GetFileSizeEx(file, &size) || size.QuadPart < 0 || size.QuadPart > 8 * 1024 * 1024) { CloseHandle(file); return; }
-    std::vector<BYTE> bytes(static_cast<size_t>(size.QuadPart));
-    DWORD read = 0;
-    if (!bytes.empty()) ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr);
-    CloseHandle(file);
-    bytes.resize(read);
-    size_t offset = (bytes.size() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) ? 2 : 0;
-    size_t chars = (bytes.size() - offset) / sizeof(wchar_t);
-    std::wstring text(chars, L'\0');
-    if (chars) memcpy(text.data(), bytes.data() + offset, chars * sizeof(wchar_t));
-    SetWindowTextW(g_notesEdit, text.c_str());
-}
-
-void SetLayerOpacity() {
-    if (!g_hwnd) return;
-    BYTE alpha = static_cast<BYTE>((std::clamp(g_opacityValue, 40, 100) * 255) / 100);
-    SetLayeredWindowAttributes(g_hwnd, 0, alpha, LWA_ALPHA);
-    SaveSettings();
-}
-
-void SetPassThrough(bool enabled) {
-    g_isPassthrough = enabled;
-    LONG_PTR ex = GetWindowLongPtrW(g_hwnd, GWL_EXSTYLE);
-    if (enabled) ex |= WS_EX_TRANSPARENT;
-    else ex &= ~static_cast<LONG_PTR>(WS_EX_TRANSPARENT);
-    SetWindowLongPtrW(g_hwnd, GWL_EXSTYLE, ex);
-    if (g_passthrough) SendMessageW(g_passthrough, BM_SETCHECK, enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-    SaveSettings();
-    InvalidateRect(g_hwnd, nullptr, TRUE);
+void SetLayerOpacity(int value) {
+    g_opacityValue = std::clamp(value, 45, 100);
+    if (g_hwnd) SetLayeredWindowAttributes(g_hwnd, 0, static_cast<BYTE>((g_opacityValue * 255) / 100), LWA_ALPHA);
+    SaveInteger(L"Appearance", L"Opacity", g_opacityValue);
 }
 
 void SetTopmost(bool enabled) {
     g_isTopmost = enabled;
-    SetWindowPos(g_hwnd, enabled ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+    if (g_hwnd) SetWindowPos(g_hwnd, enabled ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    if (g_topmost) SendMessageW(g_topmost, BM_SETCHECK, enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-    SaveSettings();
+    SaveInteger(L"Window", L"Topmost", enabled ? 1 : 0);
+}
+
+void SetPassThrough(bool enabled) {
+    g_isPassthrough = enabled;
+    if (g_hwnd) {
+        LONG_PTR style = GetWindowLongPtrW(g_hwnd, GWL_EXSTYLE);
+        if (enabled) style |= WS_EX_TRANSPARENT;
+        else style &= ~static_cast<LONG_PTR>(WS_EX_TRANSPARENT);
+        SetWindowLongPtrW(g_hwnd, GWL_EXSTYLE, style);
+        SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+    SaveInteger(L"Window", L"PassThrough", enabled ? 1 : 0);
+}
+
+std::vector<std::wstring> Split(const std::wstring& value, wchar_t separator) {
+    std::vector<std::wstring> parts;
+    size_t start = 0;
+    while (start <= value.size()) {
+        size_t end = value.find(separator, start);
+        if (end == std::wstring::npos) end = value.size();
+        parts.emplace_back(value.substr(start, end - start));
+        if (end == value.size()) break;
+        start = end + 1;
+    }
+    return parts;
+}
+
+bool ParseHotkey(const std::wstring& specification, UINT& modifiers, UINT& key) {
+    modifiers = MOD_NOREPEAT;
+    key = 0;
+    bool hasModifier = false;
+    bool hasKey = false;
+    for (std::wstring token : Split(specification, L'+')) {
+        token.erase(std::remove_if(token.begin(), token.end(), [](wchar_t ch) { return std::iswspace(ch) != 0; }), token.end());
+        std::transform(token.begin(), token.end(), token.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towupper(ch)); });
+        if (token == L"CTRL" || token == L"CONTROL") { modifiers |= MOD_CONTROL; hasModifier = true; }
+        else if (token == L"ALT") { modifiers |= MOD_ALT; hasModifier = true; }
+        else if (token == L"SHIFT") { modifiers |= MOD_SHIFT; hasModifier = true; }
+        else if (token == L"WIN" || token == L"WINDOWS") { modifiers |= MOD_WIN; hasModifier = true; }
+        else if (token == L"SPACE") { key = VK_SPACE; hasKey = true; }
+        else if (token == L"TAB") { key = VK_TAB; hasKey = true; }
+        else if (token == L"ENTER") { key = VK_RETURN; hasKey = true; }
+        else if (token == L"ESC" || token == L"ESCAPE") { key = VK_ESCAPE; hasKey = true; }
+        else if (token.size() == 1 && token[0] >= L'A' && token[0] <= L'Z') { key = static_cast<UINT>(token[0]); hasKey = true; }
+        else if (token.size() == 1 && token[0] >= L'0' && token[0] <= L'9') { key = static_cast<UINT>(token[0]); hasKey = true; }
+        else if (token.size() >= 2 && token[0] == L'F') {
+            wchar_t* end = nullptr;
+            long number = wcstol(token.c_str() + 1, &end, 10);
+            if (end && *end == L'\0' && number >= 1 && number <= 12) { key = VK_F1 + static_cast<UINT>(number - 1); hasKey = true; }
+        }
+        if (hasKey && key) continue;
+    }
+    return hasModifier && hasKey && key != 0;
+}
+
+bool ApplyHotkeys(const std::wstring& toggle, const std::wstring& interactive, bool notify) {
+    UINT toggleMods = 0, toggleKey = 0, interactiveMods = 0, interactiveKey = 0;
+    bool valid = ParseHotkey(toggle, toggleMods, toggleKey) && ParseHotkey(interactive, interactiveMods, interactiveKey);
+    UnregisterHotKey(g_hwnd, HOTKEY_TOGGLE);
+    UnregisterHotKey(g_hwnd, HOTKEY_INTERACTIVE);
+    bool registered = valid &&
+        RegisterHotKey(g_hwnd, HOTKEY_TOGGLE, toggleMods, toggleKey) &&
+        RegisterHotKey(g_hwnd, HOTKEY_INTERACTIVE, interactiveMods, interactiveKey);
+    if (!registered) {
+        UnregisterHotKey(g_hwnd, HOTKEY_TOGGLE);
+        UnregisterHotKey(g_hwnd, HOTKEY_INTERACTIVE);
+        UINT dm = 0, dk = 0, im = 0, ik = 0;
+        ParseHotkey(kDefaultToggleHotkey, dm, dk);
+        ParseHotkey(kDefaultInteractiveHotkey, im, ik);
+        RegisterHotKey(g_hwnd, HOTKEY_TOGGLE, dm, dk);
+        RegisterHotKey(g_hwnd, HOTKEY_INTERACTIVE, im, ik);
+        g_toggleHotkey = kDefaultToggleHotkey;
+        g_interactiveHotkey = kDefaultInteractiveHotkey;
+        if (notify && g_uiView) g_uiView->PostWebMessageAsString(L"hotkeys-result|error|CTRL+ALT+SPACE|CTRL+ALT+I");
+        return false;
+    }
+    g_toggleHotkey = toggle;
+    g_interactiveHotkey = interactive;
+    WritePrivateProfileStringW(L"Hotkeys", L"Toggle", toggle.c_str(), SettingsPath().c_str());
+    WritePrivateProfileStringW(L"Hotkeys", L"Interactive", interactive.c_str(), SettingsPath().c_str());
+    if (notify && g_uiView) g_uiView->PostWebMessageAsString(L"hotkeys-result|ok");
+    return true;
+}
+
+void PostToUi(const std::wstring& message) {
+    if (g_uiView) g_uiView->PostWebMessageAsString(message.c_str());
 }
 
 void AddTrayIcon(HWND hwnd) {
@@ -269,15 +251,14 @@ void AddTrayIcon(HWND hwnd) {
 }
 
 void RemoveTrayIcon() {
-    if (!g_trayIconAdded) return;
-    Shell_NotifyIconW(NIM_DELETE, &g_trayData);
+    if (g_trayIconAdded) Shell_NotifyIconW(NIM_DELETE, &g_trayData);
     g_trayIconAdded = false;
 }
 
 void ShowMainWindow() {
     if (!g_hwnd) return;
-    ShowWindow(g_hwnd, SW_SHOWNORMAL);
-    if (IsIconic(g_hwnd)) ShowWindow(g_hwnd, SW_RESTORE);
+    ShowWindow(g_hwnd, SW_RESTORE);
+    ShowWindow(g_hwnd, SW_SHOW);
     SetForegroundWindow(g_hwnd);
 }
 
@@ -288,8 +269,8 @@ void ToggleMainWindow() {
 }
 
 void ShowTrayContextMenu(HWND hwnd) {
-    POINT pt{};
-    GetCursorPos(&pt);
+    POINT point{};
+    GetCursorPos(&point);
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
     AppendMenuW(menu, MF_STRING, ID_TRAY_OPEN, IsWindowVisible(hwnd) ? L"Hide PrivaLayer" : L"Open PrivaLayer");
@@ -297,160 +278,56 @@ void ShowTrayContextMenu(HWND hwnd) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"Exit");
     SetForegroundWindow(hwnd);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hwnd, nullptr);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN, point.x, point.y, 0, hwnd, nullptr);
     DestroyMenu(menu);
     PostMessageW(hwnd, WM_NULL, 0, 0);
 }
 
-void ShowPageControl(HWND h, bool show) {
-    if (h) ShowWindow(h, show ? SW_SHOW : SW_HIDE);
-}
-
 void LayoutBrowser() {
-    if (!g_webController || !g_hwnd) return;
-    RECT rc{};
-    GetClientRect(g_hwnd, &rc);
-    RECT bounds{ kContentLeft, 190, rc.right - 28, rc.bottom - 28 };
-    g_webController->put_Bounds(bounds);
+    if (!g_browserController || !g_hwnd) return;
+    RECT client{};
+    GetClientRect(g_hwnd, &client);
+    RECT bounds{ g_sidebarCollapsed ? 76L : 248L, 160, std::max(g_sidebarCollapsed ? 96L : 270L, client.right - 22), std::max(180L, client.bottom - 22) };
+    g_browserController->put_Bounds(bounds);
 }
 
-void EnsureWebView() {
-    if (g_webInitStarted || !g_hwnd) return;
-    g_webInitStarted = true;
-    std::wstring userData = BrowserDataPath().wstring();
-    HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
-        nullptr, userData.c_str(), nullptr,
-        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [](HRESULT result, ICoreWebView2Environment* environment) -> HRESULT {
-                if (FAILED(result) || !environment) {
-                    MessageBoxW(g_hwnd, L"WebView2 could not be initialized. Install the Microsoft Edge WebView2 Runtime and restart PrivaLayer.", kAppName, MB_ICONWARNING);
-                    return S_OK;
-                }
-                g_webEnvironment = environment;
-                return g_webEnvironment->CreateCoreWebView2Controller(g_hwnd,
-                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [](HRESULT controllerResult, ICoreWebView2Controller* controller) -> HRESULT {
-                            if (FAILED(controllerResult) || !controller) {
-                                MessageBoxW(g_hwnd, L"The embedded browser could not be created.", kAppName, MB_ICONWARNING);
-                                return S_OK;
-                            }
-                            g_webController = controller;
-                            g_webController->get_CoreWebView2(&g_webView);
-                            LayoutBrowser();
-                            g_webController->put_IsVisible(g_page == PAGE_BROWSER ? TRUE : FALSE);
-                            if (g_webView) g_webView->Navigate(L"https://aistudio.google.com/");
-                            return S_OK;
-                        }).Get());
-            }).Get());
-    if (FAILED(hr)) {
-        MessageBoxW(g_hwnd, L"Unable to start WebView2. Check the WebView2 Runtime installation.", kAppName, MB_ICONWARNING);
+void SetBrowserVisible(bool visible) {
+    g_browserVisible = visible;
+    if (g_browserController) {
+        LayoutBrowser();
+        g_browserController->put_IsVisible(visible ? TRUE : FALSE);
     }
 }
 
-void NavigateBrowser() {
-    if (!g_webView || !g_urlEdit) return;
-    int n = GetWindowTextLengthW(g_urlEdit);
-    std::wstring url(static_cast<size_t>(n) + 1, L'\0');
-    GetWindowTextW(g_urlEdit, url.data(), n + 1);
-    url.resize(static_cast<size_t>(n));
-    if (url.empty()) return;
-    if (url.find(L"://") == std::wstring::npos) url = L"https://" + url;
-    g_webView->Navigate(url.c_str());
+void NavigateBrowser(const std::wstring& url) {
+    if (!g_browserView || url.empty()) return;
+    std::wstring target = url;
+    if (target.find(L"://") == std::wstring::npos) target = L"https://" + target;
+    g_browserView->Navigate(target.c_str());
 }
 
-void SetPage(Page page) {
-    SaveNotes();
-    g_page = page;
-    const bool notes = page == PAGE_NOTES;
-    const bool browser = page == PAGE_BROWSER;
-    const bool ai = page == PAGE_AI;
-    const bool settings = page == PAGE_SETTINGS;
-    const bool workspace = page == PAGE_WORKSPACE;
-
-    ShowPageControl(g_notesEdit, notes);
-    ShowPageControl(g_notesSave, notes);
-    ShowPageControl(g_urlEdit, browser);
-    ShowPageControl(g_browserGo, browser);
-    ShowPageControl(g_browserBack, browser);
-    ShowPageControl(g_browserForward, browser);
-    ShowPageControl(g_aiPrompt, ai);
-    ShowPageControl(g_aiCopy, ai);
-    ShowPageControl(g_aiSnip, ai);
-    ShowPageControl(g_aiImport, ai);
-    ShowPageControl(g_aiOpenStudio, ai);
-    ShowPageControl(g_opacity, settings);
-    ShowPageControl(g_topmost, settings);
-    ShowPageControl(g_passthrough, settings);
-    ShowPageControl(g_theme, settings);
-    ShowPageControl(g_workNotes, workspace);
-    ShowPageControl(g_workBrowser, workspace);
-    ShowPageControl(g_workAI, workspace);
-    ShowPageControl(g_openCaptureFolder, ai);
-
-    for (size_t i = 0; i < g_navButtons.size(); ++i) {
-        if (g_navButtons[i]) InvalidateRect(g_navButtons[i], nullptr, TRUE);
-    }
-    if (g_webController) g_webController->put_IsVisible(browser ? TRUE : FALSE);
-    if (browser) EnsureWebView();
-    InvalidateRect(g_hwnd, nullptr, TRUE);
-}
-
-void OpenEdgeStudio() {
-    std::vector<fs::path> candidates;
-    wchar_t* env = nullptr;
-    size_t len = 0;
-    if (_wdupenv_s(&env, &len, L"PROGRAMFILES(X86)") == 0 && env) {
-        candidates.emplace_back(fs::path(env) / L"Microsoft/Edge/Application/msedge.exe");
-        free(env);
-    }
-    if (_wdupenv_s(&env, &len, L"PROGRAMFILES") == 0 && env) {
-        candidates.emplace_back(fs::path(env) / L"Microsoft/Edge/Application/msedge.exe");
-        free(env);
-    }
-    candidates.emplace_back(fs::path(GetKnownFolder(FOLDERID_LocalAppData)) / L"Microsoft/Edge/Application/msedge.exe");
-    for (const auto& p : candidates) {
-        if (fs::exists(p)) {
-            ShellExecuteW(nullptr, L"open", p.c_str(), L"https://aistudio.google.com/", nullptr, SW_SHOWNORMAL);
-            return;
-        }
-    }
-    ShellExecuteW(nullptr, L"open", L"https://aistudio.google.com/", nullptr, nullptr, SW_SHOWNORMAL);
-}
-
-void CopyTextToClipboard(const std::wstring& text) {
-    if (!OpenClipboard(g_hwnd)) return;
-    EmptyClipboard();
-    SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (mem) {
-        void* ptr = GlobalLock(mem);
-        if (ptr) {
-            memcpy(ptr, text.c_str(), bytes);
-            GlobalUnlock(mem);
-            SetClipboardData(CF_UNICODETEXT, mem);
-        } else GlobalFree(mem);
-    }
-    CloseClipboard();
+std::wstring MakeCaptureName() {
+    SYSTEMTIME time{};
+    GetLocalTime(&time);
+    wchar_t name[96]{};
+    swprintf_s(name, L"Capture_%04u%02u%02u_%02u%02u%02u.png",
+        time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
+    return name;
 }
 
 int GetPngEncoderClsid(CLSID* clsid) {
     UINT count = 0, size = 0;
-    if (Gdiplus::GetImageEncodersSize(&count, &size) != Gdiplus::Ok || size == 0) return -1;
+    if (Gdiplus::GetImageEncodersSize(&count, &size) != Gdiplus::Ok || !size) return -1;
     std::vector<BYTE> buffer(size);
     auto* codecs = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buffer.data());
     if (Gdiplus::GetImageEncoders(count, size, codecs) != Gdiplus::Ok) return -1;
     for (UINT i = 0; i < count; ++i) {
-        if (wcscmp(codecs[i].MimeType, L"image/png") == 0) { *clsid = codecs[i].Clsid; return static_cast<int>(i); }
+        if (wcscmp(codecs[i].MimeType, L"image/png") == 0) {
+            *clsid = codecs[i].Clsid;
+            return static_cast<int>(i);
+        }
     }
     return -1;
-}
-
-std::wstring MakeCaptureName() {
-    SYSTEMTIME st{};
-    GetLocalTime(&st);
-    wchar_t name[100]{};
-    swprintf_s(name, L"Capture_%04u%02u%02u_%02u%02u%02u.png", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-    return name;
 }
 
 bool SaveClipboardBitmap(const fs::path& path) {
@@ -482,421 +359,293 @@ bool SaveClipboardBitmap(const fs::path& path) {
             }
         }
     }
-
-    bool ok = false;
+    bool saved = false;
     if (bitmapHandle) {
         CLSID png{};
         Gdiplus::Bitmap bitmap(bitmapHandle, nullptr);
-        ok = GetPngEncoderClsid(&png) >= 0 && bitmap.GetLastStatus() == Gdiplus::Ok &&
-             bitmap.Save(path.c_str(), &png, nullptr) == Gdiplus::Ok;
+        saved = GetPngEncoderClsid(&png) >= 0 && bitmap.GetLastStatus() == Gdiplus::Ok &&
+            bitmap.Save(path.c_str(), &png, nullptr) == Gdiplus::Ok;
     }
     if (ownsBitmap && bitmapHandle) DeleteObject(bitmapHandle);
     if (dibData) GlobalUnlock(dibMemory);
     CloseClipboard();
-    return ok;
+    return saved;
 }
 
 void StartWindowsSnip() {
-    // Explicitly launches the Windows Snipping Tool UI. The user chooses what to capture.
-    INPUT downs[3]{};
-    downs[0].type = INPUT_KEYBOARD; downs[0].ki.wVk = VK_LWIN;
-    downs[1].type = INPUT_KEYBOARD; downs[1].ki.wVk = VK_SHIFT;
-    downs[2].type = INPUT_KEYBOARD; downs[2].ki.wVk = 'S';
-    SendInput(3, downs, sizeof(INPUT));
-    INPUT ups[3]{};
-    ups[0].type = INPUT_KEYBOARD; ups[0].ki.wVk = 'S'; ups[0].ki.dwFlags = KEYEVENTF_KEYUP;
-    ups[1].type = INPUT_KEYBOARD; ups[1].ki.wVk = VK_SHIFT; ups[1].ki.dwFlags = KEYEVENTF_KEYUP;
-    ups[2].type = INPUT_KEYBOARD; ups[2].ki.wVk = VK_LWIN; ups[2].ki.dwFlags = KEYEVENTF_KEYUP;
-    SendInput(3, ups, sizeof(INPUT));
+    // Uses the official Windows snipping UI; the user selects the region manually.
+    ShowWindow(g_hwnd, SW_HIDE);
+    INPUT input[6]{};
+    input[0].type = INPUT_KEYBOARD; input[0].ki.wVk = VK_LWIN;
+    input[1].type = INPUT_KEYBOARD; input[1].ki.wVk = VK_SHIFT;
+    input[2].type = INPUT_KEYBOARD; input[2].ki.wVk = 'S';
+    input[3].type = INPUT_KEYBOARD; input[3].ki.wVk = 'S'; input[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    input[4].type = INPUT_KEYBOARD; input[4].ki.wVk = VK_SHIFT; input[4].ki.dwFlags = KEYEVENTF_KEYUP;
+    input[5].type = INPUT_KEYBOARD; input[5].ki.wVk = VK_LWIN; input[5].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(6, input, sizeof(INPUT));
+    PostToUi(L"capture-started");
 }
 
 void ImportCapture() {
     fs::path path = CaptureFolder() / MakeCaptureName();
-    bool hasImage = IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_DIBV5);
-    if (!hasImage || !SaveClipboardBitmap(path)) {
-        MessageBoxW(g_hwnd, L"No clipboard image was found. Take a snip with Win + Shift + S, finish the selection, then try Import again.", kAppName, MB_ICONWARNING);
+    bool available = IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_DIBV5);
+    if (!available || !SaveClipboardBitmap(path)) {
+        PostToUi(L"capture-error|No image found in the clipboard. Finish the Windows snip, reopen PrivaLayer and import again.");
         return;
     }
     g_lastCapturePath = path.wstring();
-    std::wstring message = L"Capture saved to:\n" + g_lastCapturePath + L"\n\nThe image remains on your clipboard. Open AI Studio and press Ctrl+V to attach it.";
-    MessageBoxW(g_hwnd, message.c_str(), L"Capture ready", MB_ICONINFORMATION);
+    PostToUi(std::wstring(L"capture-saved|") + path.filename().wstring());
 }
 
 void OpenCaptureFolder() {
     ShellExecuteW(nullptr, L"open", CaptureFolder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
-void ApplyTheme() {
-    if (g_theme) g_themeIndex = static_cast<int>(SendMessageW(g_theme, CB_GETCURSEL, 0, 0));
-    SaveSettings();
-    InvalidateRect(g_hwnd, nullptr, TRUE);
-    for (HWND h : { g_notesEdit, g_urlEdit, g_aiPrompt }) if (h) InvalidateRect(h, nullptr, TRUE);
+void CopyToClipboard(const std::wstring& value) {
+    if (!OpenClipboard(g_hwnd)) return;
+    EmptyClipboard();
+    SIZE_T bytes = (value.size() + 1) * sizeof(wchar_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (memory) {
+        void* target = GlobalLock(memory);
+        if (target) {
+            memcpy(target, value.c_str(), bytes);
+            GlobalUnlock(memory);
+            SetClipboardData(CF_UNICODETEXT, memory);
+        } else GlobalFree(memory);
+    }
+    CloseClipboard();
 }
 
-void CreateControls(HWND hwnd) {
-    g_hwnd = hwnd;
-    const DWORD childVisible = WS_CHILD | WS_VISIBLE;
-
-    g_navButtons = {
-        MakeChild(0, L"BUTTON", L"Overview", childVisible | BS_OWNERDRAW, 12, 108, 180, 42, ID_NAV_HOME),
-        MakeChild(0, L"BUTTON", L"Notes", childVisible | BS_OWNERDRAW, 12, 156, 180, 42, ID_NAV_NOTES),
-        MakeChild(0, L"BUTTON", L"Browser", childVisible | BS_OWNERDRAW, 12, 204, 180, 42, ID_NAV_BROWSER),
-        MakeChild(0, L"BUTTON", L"AI Assistant", childVisible | BS_OWNERDRAW, 12, 252, 180, 42, ID_NAV_AI),
-        MakeChild(0, L"BUTTON", L"Workspace", childVisible | BS_OWNERDRAW, 12, 300, 180, 42, ID_NAV_WORKSPACE),
-        MakeChild(0, L"BUTTON", L"Settings", childVisible | BS_OWNERDRAW, 12, 348, 180, 42, ID_NAV_SETTINGS)
-    };
-
-    g_notesEdit = MakeChild(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP,
-        kContentLeft, 190, kControlWidth, 470, ID_NOTES_EDIT);
-    g_notesSave = MakeChild(0, L"BUTTON", L"Save notes", childVisible | BS_OWNERDRAW, kContentLeft, 676, 140, 42, ID_NOTES_SAVE);
-
-    g_urlEdit = MakeChild(WS_EX_CLIENTEDGE, L"EDIT", L"https://aistudio.google.com/", WS_CHILD | ES_AUTOHSCROLL | WS_TABSTOP,
-        kContentLeft, 150, 610, 34, ID_URL_EDIT);
-    g_browserBack = MakeChild(0, L"BUTTON", L"Back", WS_CHILD | BS_OWNERDRAW, kContentLeft + 620, 150, 72, 34, ID_BROWSER_BACK);
-    g_browserForward = MakeChild(0, L"BUTTON", L"Next", WS_CHILD | BS_OWNERDRAW, kContentLeft + 698, 150, 72, 34, ID_BROWSER_FORWARD);
-    g_browserGo = MakeChild(0, L"BUTTON", L"Go", WS_CHILD | BS_OWNERDRAW, kContentLeft + 776, 150, 70, 34, ID_BROWSER_GO);
-
-    g_aiPrompt = MakeChild(WS_EX_CLIENTEDGE, L"EDIT", L"Select text or describe what you need help with...", WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP,
-        kContentLeft, 190, 790, 210, ID_AI_PROMPT);
-    g_aiCopy = MakeChild(0, L"BUTTON", L"Copy prompt", childVisible | BS_OWNERDRAW, kContentLeft, 420, 130, 42, ID_AI_COPY_PROMPT);
-    g_aiSnip = MakeChild(0, L"BUTTON", L"Start screen snip", childVisible | BS_OWNERDRAW, kContentLeft + 142, 420, 170, 42, ID_AI_START_SNIP);
-    g_aiImport = MakeChild(0, L"BUTTON", L"Import clipboard image", childVisible | BS_OWNERDRAW, kContentLeft + 324, 420, 190, 42, ID_AI_IMPORT_CAPTURE);
-    g_aiOpenStudio = MakeChild(0, L"BUTTON", L"Open AI Studio in Edge", childVisible | BS_OWNERDRAW, kContentLeft, 478, 210, 42, ID_AI_OPEN_STUDIO);
-    g_openCaptureFolder = MakeChild(0, L"BUTTON", L"Open capture folder", childVisible | BS_OWNERDRAW, kContentLeft + 222, 478, 180, 42, ID_CAPTURE_OPEN_FOLDER);
-
-    g_workNotes = MakeChild(0, L"BUTTON", L"Open Notes", WS_CHILD | BS_OWNERDRAW, kContentLeft, 192, 180, 62, ID_WORK_OPEN_NOTES);
-    g_workBrowser = MakeChild(0, L"BUTTON", L"Open Browser", WS_CHILD | BS_OWNERDRAW, kContentLeft + 194, 192, 180, 62, ID_WORK_OPEN_BROWSER);
-    g_workAI = MakeChild(0, L"BUTTON", L"Open AI Assistant", WS_CHILD | BS_OWNERDRAW, kContentLeft + 388, 192, 200, 62, ID_WORK_OPEN_AI);
-
-    g_opacity = MakeChild(0, TRACKBAR_CLASSW, L"", WS_CHILD | TBS_AUTOTICKS | TBS_HORZ, kContentLeft, 210, 360, 42, ID_SETTINGS_OPACITY);
-    SendMessageW(g_opacity, TBM_SETRANGE, TRUE, MAKELONG(40, 100));
-    SendMessageW(g_opacity, TBM_SETPOS, TRUE, g_opacityValue);
-    g_topmost = MakeChild(0, L"BUTTON", L"Keep PrivaLayer above other windows", WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP, kContentLeft, 286, 330, 32, ID_SETTINGS_TOPMOST);
-    g_passthrough = MakeChild(0, L"BUTTON", L"Pass mouse clicks through the overlay", WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP, kContentLeft, 330, 330, 32, ID_SETTINGS_PASSTHROUGH);
-    g_theme = MakeChild(0, WC_COMBOBOXW, L"", WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL, kContentLeft, 410, 250, 250, ID_SETTINGS_THEME);
-    SendMessageW(g_theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Midnight Blue"));
-    SendMessageW(g_theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Violet"));
-    SendMessageW(g_theme, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Light"));
-    SendMessageW(g_theme, CB_SETCURSEL, g_themeIndex, 0);
-    SendMessageW(g_topmost, BM_SETCHECK, g_isTopmost ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(g_passthrough, BM_SETCHECK, g_isPassthrough ? BST_CHECKED : BST_UNCHECKED, 0);
-
-    for (HWND h : { g_notesEdit, g_notesSave, g_urlEdit, g_browserGo, g_browserBack, g_browserForward,
-                    g_aiPrompt, g_aiCopy, g_aiSnip, g_aiImport, g_aiOpenStudio, g_openCaptureFolder,
-                    g_workNotes, g_workBrowser, g_workAI, g_opacity, g_topmost, g_passthrough, g_theme }) {
-        ShowWindow(h, SW_HIDE);
+void HandleWebMessage(const std::wstring& message) {
+    std::vector<std::wstring> parts = Split(message, L'|');
+    if (parts.empty()) return;
+    const std::wstring& action = parts[0];
+    if (action == L"opacity" && parts.size() > 1) SetLayerOpacity(_wtoi(parts[1].c_str()));
+    else if (action == L"topmost" && parts.size() > 1) SetTopmost(parts[1] == L"1");
+    else if (action == L"passthrough" && parts.size() > 1) SetPassThrough(parts[1] == L"1");
+    else if (action == L"hotkeys" && parts.size() > 2) ApplyHotkeys(parts[1], parts[2], true);
+    else if (action == L"capture-start") StartWindowsSnip();
+    else if (action == L"capture-import") ImportCapture();
+    else if (action == L"capture-folder") OpenCaptureFolder();
+    else if (action == L"sidebar-collapsed" && parts.size() > 1) { g_sidebarCollapsed = parts[1] == L"1"; LayoutBrowser(); }
+    else if (action == L"browser-show") SetBrowserVisible(true);
+    else if (action == L"browser-hide") SetBrowserVisible(false);
+    else if (action == L"browser-url" && parts.size() > 1) NavigateBrowser(parts[1]);
+    else if (action == L"browser-back" && g_browserView) g_browserView->GoBack();
+    else if (action == L"browser-forward" && g_browserView) g_browserView->GoForward();
+    else if (action == L"browser-aistudio") {
+        SetBrowserVisible(true);
+        NavigateBrowser(L"https://aistudio.google.com/");
+        PostToUi(L"navigate-page|browser");
     }
-    SetControlFont(g_notesEdit, g_font);
-    SetControlFont(g_aiPrompt, g_font);
-    LoadNotes();
-    SetPage(PAGE_HOME);
+    else if (action == L"window-hide") ShowWindow(g_hwnd, SW_HIDE);
+    else if (action == L"window-minimize") ShowWindow(g_hwnd, SW_MINIMIZE);
+    else if (action == L"window-exit") DestroyWindow(g_hwnd);
+    else if (action == L"copy-text" && parts.size() > 1) CopyToClipboard(parts[1]);
 }
 
-void DrawLabel(HDC dc, const wchar_t* text, int x, int y, COLORREF color, int size = 10, bool bold = false) {
-    HFONT font = MakeFont(size, bold);
-    HGDIOBJ oldFont = SelectObject(dc, font);
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, color);
-    TextOutW(dc, x, y, text, static_cast<int>(wcslen(text)));
-    SelectObject(dc, oldFont);
-    DeleteObject(font);
+void EnsureWebViews() {
+    if (!g_hwnd || g_webEnvironment) return;
+    std::wstring userData = BrowserDataPath().wstring();
+    HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, userData.c_str(), nullptr,
+        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [](HRESULT result, ICoreWebView2Environment* environment) -> HRESULT {
+                if (FAILED(result) || !environment) {
+                    MessageBoxW(g_hwnd, L"PrivaLayer could not initialize WebView2. Install the Microsoft Edge WebView2 Runtime and restart the app.", kAppName, MB_ICONWARNING);
+                    return S_OK;
+                }
+                g_webEnvironment = environment;
+                g_webEnvironment->CreateCoreWebView2Controller(g_hwnd,
+                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                        [](HRESULT controllerResult, ICoreWebView2Controller* controller) -> HRESULT {
+                            if (FAILED(controllerResult) || !controller) {
+                                MessageBoxW(g_hwnd, L"PrivaLayer could not create its workspace surface.", kAppName, MB_ICONWARNING);
+                                return S_OK;
+                            }
+                            g_uiController = controller;
+                            g_uiController->get_CoreWebView2(&g_uiView);
+                            if (g_uiView) {
+                                g_uiView->add_WebMessageReceived(
+                                    Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                                        [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                                            LPWSTR raw = nullptr;
+                                            if (SUCCEEDED(args->TryGetWebMessageAsString(&raw)) && raw) {
+                                                HandleWebMessage(raw);
+                                                CoTaskMemFree(raw);
+                                            }
+                                            return S_OK;
+                                        }).Get(), nullptr);
+                                fs::path page = ExecutableDirectory() / L"assets" / L"ui" / L"index.html";
+                                std::vector<wchar_t> url(32768, L'\0');
+                                DWORD length = static_cast<DWORD>(url.size());
+                                if (SUCCEEDED(UrlCreateFromPathW(page.c_str(), url.data(), &length, 0))) {
+                                    g_uiView->add_NavigationCompleted(
+                                        Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                            [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
+                                                wchar_t state[512]{};
+                                                swprintf_s(state, L"native-settings|%d|%d|%d|%s|%s",
+                                                    g_opacityValue, g_isTopmost ? 1 : 0, g_isPassthrough ? 1 : 0,
+                                                    g_toggleHotkey.c_str(), g_interactiveHotkey.c_str());
+                                                PostToUi(state);
+                                                std::wstring oldNote = ReadLegacyNotes();
+                                                if (!oldNote.empty()) PostToUi(std::wstring(L"legacy-note|") + oldNote);
+                                                return S_OK;
+                                            }).Get(), nullptr);
+                                    g_uiView->Navigate(url.data());
+                                } else {
+                                    MessageBoxW(g_hwnd, L"PrivaLayer UI files are missing. Reinstall the complete application folder.", kAppName, MB_ICONERROR);
+                                }
+                            }
+                            g_webEnvironment->CreateCoreWebView2Controller(g_hwnd,
+                                Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                                    [](HRESULT browserResult, ICoreWebView2Controller* browserController) -> HRESULT {
+                                        if (FAILED(browserResult) || !browserController) return S_OK;
+                                        g_browserController = browserController;
+                                        g_browserController->get_CoreWebView2(&g_browserView);
+                                        LayoutBrowser();
+                                        g_browserController->put_IsVisible(g_browserVisible ? TRUE : FALSE);
+                                        if (g_browserView) g_browserView->Navigate(L"https://aistudio.google.com/");
+                                        return S_OK;
+                                    }).Get());
+                            return S_OK;
+                        }).Get());
+                return S_OK;
+            }).Get());
+    if (FAILED(hr)) MessageBoxW(g_hwnd, L"Unable to start the embedded browser engine.", kAppName, MB_ICONWARNING);
 }
 
-void DrawRoundedPanel(HDC dc, RECT rc, COLORREF color, COLORREF border) {
-    HBRUSH brush = CreateSolidBrush(color);
-    HPEN pen = CreatePen(PS_SOLID, 1, border);
-    HGDIOBJ oldBrush = SelectObject(dc, brush);
-    HGDIOBJ oldPen = SelectObject(dc, pen);
-    RoundRect(dc, rc.left, rc.top, rc.right, rc.bottom, 14, 14);
-    SelectObject(dc, oldBrush);
-    SelectObject(dc, oldPen);
-    DeleteObject(brush);
-    DeleteObject(pen);
-}
-
-void PaintMain(HWND hwnd) {
-    PAINTSTRUCT ps{};
-    HDC dc = BeginPaint(hwnd, &ps);
-    RECT rc{}; GetClientRect(hwnd, &rc);
-    const Palette& p = CurrentPalette();
-    HBRUSH bg = CreateSolidBrush(p.bg);
-    FillRect(dc, &rc, bg);
-    DeleteObject(bg);
-    RECT side{ 0, 0, kSidebarWidth, rc.bottom };
-    HBRUSH sideBrush = CreateSolidBrush(p.sidebar);
-    FillRect(dc, &side, sideBrush);
-    DeleteObject(sideBrush);
-    HPEN line = CreatePen(PS_SOLID, 1, p.border);
-    HGDIOBJ oldPen = SelectObject(dc, line);
-    MoveToEx(dc, kSidebarWidth, 0, nullptr); LineTo(dc, kSidebarWidth, rc.bottom);
-    MoveToEx(dc, kSidebarWidth, kHeaderHeight, nullptr); LineTo(dc, rc.right, kHeaderHeight);
-    SelectObject(dc, oldPen); DeleteObject(line);
-
-    if (g_logo && g_logo->GetLastStatus() == Gdiplus::Ok) {
-        Gdiplus::Graphics graphics(dc);
-        graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-        graphics.DrawImage(g_logo, 20, 22, 44, 44);
-    }
-    DrawLabel(dc, L"PrivaLayer", 72, 29, p.text, 17, true);
-    DrawLabel(dc, L"PERSONAL WORKSPACE", 73, 51, p.muted, 7, true);
-    DrawLabel(dc, L"PRIVATE DESKTOP SPACE", 18, 82, p.muted, 7, true);
-
-    const wchar_t* title = L"Overview";
-    const wchar_t* subtitle = L"A focused workspace for notes, web research and AI assistance.";
-    switch (g_page) {
-        case PAGE_NOTES: title = L"Notes"; subtitle = L"Your notes are saved locally on this PC."; break;
-        case PAGE_BROWSER: title = L"Browser"; subtitle = L"WebView2 browser. Website sign-in policies still apply."; break;
-        case PAGE_AI: title = L"AI Assistant"; subtitle = L"Prepare a prompt, capture a region, then paste the image into AI Studio."; break;
-        case PAGE_WORKSPACE: title = L"Workspace"; subtitle = L"Quick access to the four tools in PrivaLayer."; break;
-        case PAGE_SETTINGS: title = L"Settings"; subtitle = L"Customize appearance and interaction."; break;
-    }
-    DrawLabel(dc, title, kContentLeft, 30, p.text, 19, true);
-    DrawLabel(dc, subtitle, kContentLeft, 56, p.muted, 9, false);
-
-    if (g_page == PAGE_HOME) {
-        RECT card1{ kContentLeft, 150, kContentLeft + 280, 280 };
-        RECT card2{ kContentLeft + 300, 150, kContentLeft + 580, 280 };
-        RECT card3{ kContentLeft, 300, kContentLeft + 280, 430 };
-        RECT card4{ kContentLeft + 300, 300, kContentLeft + 580, 430 };
-        DrawRoundedPanel(dc, card1, p.panel, p.border); DrawRoundedPanel(dc, card2, p.panel, p.border);
-        DrawRoundedPanel(dc, card3, p.panel, p.border); DrawRoundedPanel(dc, card4, p.panel, p.border);
-        DrawLabel(dc, L"01  NOTES", card1.left + 18, card1.top + 18, p.accent2, 9, true);
-        DrawLabel(dc, L"Keep key points close", card1.left + 18, card1.top + 52, p.text, 12, true);
-        DrawLabel(dc, L"Quick notes saved locally.", card1.left + 18, card1.top + 82, p.muted, 9);
-        DrawLabel(dc, L"02  BROWSER", card2.left + 18, card2.top + 18, p.accent2, 9, true);
-        DrawLabel(dc, L"Research without switching", card2.left + 18, card2.top + 52, p.text, 11, true);
-        DrawLabel(dc, L"Powered by Microsoft WebView2.", card2.left + 18, card2.top + 82, p.muted, 9);
-        DrawLabel(dc, L"03  AI ASSISTANT", card3.left + 18, card3.top + 18, p.accent2, 9, true);
-        DrawLabel(dc, L"Prepare prompts and captures", card3.left + 18, card3.top + 52, p.text, 11, true);
-        DrawLabel(dc, L"Copy prompts and images to AI Studio.", card3.left + 18, card3.top + 82, p.muted, 9);
-        DrawLabel(dc, L"04  WORKSPACE", card4.left + 18, card4.top + 18, p.accent2, 9, true);
-        DrawLabel(dc, L"One place for your tools", card4.left + 18, card4.top + 52, p.text, 12, true);
-        DrawLabel(dc, L"Quick access and appearance controls.", card4.left + 18, card4.top + 82, p.muted, 9);
-        DrawLabel(dc, L"HOTKEYS", kContentLeft, 482, p.muted, 8, true);
-        DrawLabel(dc, L"Ctrl + Alt + Space   Show / hide window", kContentLeft, 510, p.text, 10);
-        DrawLabel(dc, L"Ctrl + Alt + I           Toggle click-through mode", kContentLeft, 537, p.text, 10);
-        DrawLabel(dc, L"Capture starts from the visible Capture button in AI Assistant.", kContentLeft, 564, p.text, 9);
-        DrawLabel(dc, L"Note: PrivaLayer remains visible in normal screen sharing and recording.", kContentLeft, 620, p.muted, 8);
-    }
-    else if (g_page == PAGE_AI) {
-        DrawLabel(dc, L"Prompt", kContentLeft, 166, p.muted, 9, true);
-        DrawLabel(dc, L"Capture workflow", kContentLeft, 548, p.muted, 9, true);
-        DrawLabel(dc, L"1. Start screen snip and select the area in Windows.", kContentLeft, 578, p.text, 9);
-        DrawLabel(dc, L"2. Import the clipboard image. It is saved locally and stays on the clipboard.", kContentLeft, 602, p.text, 9);
-        DrawLabel(dc, L"3. Open AI Studio in Edge and press Ctrl+V to attach it yourself.", kContentLeft, 626, p.text, 9);
-        DrawLabel(dc, L"No background capture or automatic upload is performed.", kContentLeft, 658, p.muted, 8);
-    }
-    else if (g_page == PAGE_SETTINGS) {
-        DrawLabel(dc, L"Window opacity", kContentLeft, 178, p.text, 10, true);
-        wchar_t opacityText[32]{}; swprintf_s(opacityText, L"%d%%", g_opacityValue);
-        DrawLabel(dc, opacityText, kContentLeft + 390, 220, p.accent2, 10, true);
-        DrawLabel(dc, L"Interaction", kContentLeft, 252, p.text, 10, true);
-        DrawLabel(dc, L"Appearance", kContentLeft, 382, p.text, 10, true);
-        DrawLabel(dc, L"Pass-through mode leaves the overlay visible but sends mouse clicks to windows behind it.", kContentLeft, 370, p.muted, 8);
-    }
-    else if (g_page == PAGE_WORKSPACE) {
-        DrawRoundedPanel(dc, RECT{ kContentLeft, 154, kContentLeft + 600, 300 }, p.panel, p.border);
-        DrawLabel(dc, L"Your workspace", kContentLeft + 22, 174, p.text, 13, true);
-        DrawLabel(dc, L"Choose a tool to open it. Notes and browser data remain on this computer.", kContentLeft + 22, 208, p.muted, 9);
-    }
-    EndPaint(hwnd, &ps);
-}
-
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (g_taskbarCreatedMessage && msg == g_taskbarCreatedMessage) {
+LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (g_taskbarCreatedMessage && message == g_taskbarCreatedMessage) {
         g_trayIconAdded = false;
         AddTrayIcon(hwnd);
         return 0;
     }
-    switch (msg) {
-    case WM_CREATE:
-        CreateControls(hwnd);
-        SetPassThrough(g_isPassthrough);
-        RegisterHotKey(hwnd, HOTKEY_TOGGLE, MOD_CONTROL | MOD_ALT, VK_SPACE);
-        RegisterHotKey(hwnd, HOTKEY_INTERACTIVE, MOD_CONTROL | MOD_ALT, 'I');
+    switch (message) {
+    case WM_CREATE: {
+        g_hwnd = hwnd;
+        EnsureWebViews();
+        ApplyHotkeys(g_toggleHotkey, g_interactiveHotkey, false);
+        SetLayerOpacity(g_opacityValue);
         SetTopmost(g_isTopmost);
+        SetPassThrough(g_isPassthrough);
         return 0;
-    case WM_TRAY_CALLBACK:
-        if (LOWORD(lParam) == WM_LBUTTONUP || LOWORD(lParam) == WM_LBUTTONDBLCLK) {
-            ToggleMainWindow();
-        } else if (LOWORD(lParam) == WM_RBUTTONUP || LOWORD(lParam) == WM_CONTEXTMENU) {
-            ShowTrayContextMenu(hwnd);
-        }
-        return 0;
-    case WM_PAINT:
-        PaintMain(hwnd);
-        return 0;
+    }
     case WM_SIZE:
+        if (g_uiController) {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            g_uiController->put_Bounds(client);
+        }
         LayoutBrowser();
         return 0;
+    case WM_DPICHANGED: {
+        auto* suggested = reinterpret_cast<RECT*>(lParam);
+        SetWindowPos(hwnd, nullptr, suggested->left, suggested->top,
+            suggested->right - suggested->left, suggested->bottom - suggested->top,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+    }
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-        info->ptMinTrackSize.x = 1160;
-        info->ptMinTrackSize.y = 780;
+        info->ptMinTrackSize.x = 1050;
+        info->ptMinTrackSize.y = 680;
         return 0;
     }
+    case WM_TRAY_CALLBACK:
+        if (LOWORD(lParam) == WM_LBUTTONUP || LOWORD(lParam) == WM_LBUTTONDBLCLK) ToggleMainWindow();
+        else if (LOWORD(lParam) == WM_RBUTTONUP || LOWORD(lParam) == WM_CONTEXTMENU) ShowTrayContextMenu(hwnd);
+        return 0;
     case WM_HOTKEY:
-        if (wParam == HOTKEY_TOGGLE) {
-            ShowWindow(hwnd, IsWindowVisible(hwnd) ? SW_HIDE : SW_SHOW);
-            if (IsWindowVisible(hwnd)) { SetForegroundWindow(hwnd); }
-        } else if (wParam == HOTKEY_INTERACTIVE) {
+        if (wParam == HOTKEY_TOGGLE) ToggleMainWindow();
+        else if (wParam == HOTKEY_INTERACTIVE) {
             SetPassThrough(!g_isPassthrough);
+            PostToUi(g_isPassthrough ? L"native-passthrough|1" : L"native-passthrough|0");
         }
         return 0;
-    case WM_COMMAND: {
-        int id = LOWORD(wParam);
-        switch (id) {
-            case ID_TRAY_OPEN: ToggleMainWindow(); break;
-            case ID_TRAY_SETTINGS: ShowMainWindow(); SetPage(PAGE_SETTINGS); break;
-            case ID_TRAY_EXIT: SaveNotes(); DestroyWindow(hwnd); break;
-            case ID_NAV_HOME: SetPage(PAGE_HOME); break;
-            case ID_NAV_NOTES: SetPage(PAGE_NOTES); break;
-            case ID_NAV_BROWSER: SetPage(PAGE_BROWSER); break;
-            case ID_NAV_AI: SetPage(PAGE_AI); break;
-            case ID_NAV_WORKSPACE: SetPage(PAGE_WORKSPACE); break;
-            case ID_NAV_SETTINGS: SetPage(PAGE_SETTINGS); break;
-            case ID_NOTES_SAVE: SaveNotes(); MessageBoxW(hwnd, L"Notes saved locally.", kAppName, MB_ICONINFORMATION); break;
-            case ID_BROWSER_GO: NavigateBrowser(); break;
-            case ID_BROWSER_BACK: if (g_webView) g_webView->GoBack(); break;
-            case ID_BROWSER_FORWARD: if (g_webView) g_webView->GoForward(); break;
-            case ID_AI_COPY_PROMPT: {
-                int n = GetWindowTextLengthW(g_aiPrompt);
-                std::wstring value(static_cast<size_t>(n) + 1, L'\0');
-                GetWindowTextW(g_aiPrompt, value.data(), n + 1); value.resize(static_cast<size_t>(n));
-                CopyTextToClipboard(value);
-                MessageBoxW(hwnd, L"Prompt copied. Paste it into your AI chat.", kAppName, MB_ICONINFORMATION);
-                break;
-            }
-            case ID_AI_START_SNIP: StartWindowsSnip(); break;
-            case ID_AI_IMPORT_CAPTURE: ImportCapture(); break;
-            case ID_AI_OPEN_STUDIO: OpenEdgeStudio(); break;
-            case ID_CAPTURE_OPEN_FOLDER: OpenCaptureFolder(); break;
-            case ID_WORK_OPEN_NOTES: SetPage(PAGE_NOTES); break;
-            case ID_WORK_OPEN_BROWSER: SetPage(PAGE_BROWSER); break;
-            case ID_WORK_OPEN_AI: SetPage(PAGE_AI); break;
-            case ID_SETTINGS_TOPMOST:
-                SetTopmost(SendMessageW(g_topmost, BM_GETCHECK, 0, 0) == BST_CHECKED); break;
-            case ID_SETTINGS_PASSTHROUGH:
-                SetPassThrough(SendMessageW(g_passthrough, BM_GETCHECK, 0, 0) == BST_CHECKED); break;
-            case ID_SETTINGS_THEME: if (HIWORD(wParam) == CBN_SELCHANGE) ApplyTheme(); break;
-        }
-        if (HIWORD(wParam) == EN_CHANGE && id == ID_NOTES_EDIT) SaveNotes();
-        if (HIWORD(wParam) == EN_KILLFOCUS && id == ID_URL_EDIT) NavigateBrowser();
-        return 0;
-    }
-    case WM_HSCROLL:
-        if (reinterpret_cast<HWND>(lParam) == g_opacity) {
-            g_opacityValue = static_cast<int>(SendMessageW(g_opacity, TBM_GETPOS, 0, 0));
-            SetLayerOpacity(); InvalidateRect(hwnd, nullptr, TRUE);
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case ID_TRAY_OPEN: ToggleMainWindow(); break;
+        case ID_TRAY_SETTINGS:
+            ShowMainWindow();
+            PostToUi(L"navigate-page|settings");
+            break;
+        case ID_TRAY_EXIT: DestroyWindow(hwnd); break;
         }
         return 0;
-    case WM_DRAWITEM: {
-        auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-        if (!dis) return FALSE;
-        const Palette& p = CurrentPalette();
-        int id = static_cast<int>(dis->CtlID);
-        bool nav = id >= ID_NAV_HOME && id <= ID_NAV_SETTINGS;
-        bool active = (id == ID_NAV_HOME && g_page == PAGE_HOME) || (id == ID_NAV_NOTES && g_page == PAGE_NOTES) ||
-                      (id == ID_NAV_BROWSER && g_page == PAGE_BROWSER) || (id == ID_NAV_AI && g_page == PAGE_AI) ||
-                      (id == ID_NAV_WORKSPACE && g_page == PAGE_WORKSPACE) || (id == ID_NAV_SETTINGS && g_page == PAGE_SETTINGS);
-        COLORREF fill = active ? p.panel2 : (dis->itemState & ODS_SELECTED ? p.panel2 : p.panel);
-        HBRUSH brush = CreateSolidBrush(fill);
-        FillRect(dis->hDC, &dis->rcItem, brush); DeleteObject(brush);
-        SetBkMode(dis->hDC, TRANSPARENT);
-        SetTextColor(dis->hDC, active ? p.accent2 : p.text);
-        SelectObject(dis->hDC, g_font);
-        wchar_t label[128]{}; GetWindowTextW(dis->hwndItem, label, 127);
-        RECT r = dis->rcItem; r.left += nav ? 18 : 12;
-        DrawTextW(dis->hDC, label, -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        if (active) {
-            HBRUSH marker = CreateSolidBrush(p.accent);
-            RECT m{ dis->rcItem.left, dis->rcItem.top + 8, dis->rcItem.left + 3, dis->rcItem.bottom - 8 };
-            FillRect(dis->hDC, &m, marker); DeleteObject(marker);
-        }
-        return TRUE;
-    }
-    case WM_CTLCOLOREDIT: {
-        HDC dc = reinterpret_cast<HDC>(wParam); const Palette& p = CurrentPalette();
-        SetTextColor(dc, p.text); SetBkColor(dc, p.panel2);
-        static HBRUSH editBrush = nullptr; if (editBrush) DeleteObject(editBrush); editBrush = CreateSolidBrush(p.panel2);
-        return reinterpret_cast<LRESULT>(editBrush);
-    }
-    case WM_CTLCOLORSTATIC: {
-        HDC dc = reinterpret_cast<HDC>(wParam); const Palette& p = CurrentPalette();
-        SetTextColor(dc, p.text); SetBkColor(dc, p.bg);
-        static HBRUSH staticBrush = nullptr; if (staticBrush) DeleteObject(staticBrush); staticBrush = CreateSolidBrush(p.bg);
-        return reinterpret_cast<LRESULT>(staticBrush);
-    }
     case WM_CLOSE:
-        SaveNotes();
-        if (g_trayIconAdded) {
-            ShowWindow(hwnd, SW_HIDE);
-        } else {
-            MessageBoxW(hwnd, L"The notification-area icon could not be created. Keep PrivaLayer open or exit from the process list.", kAppName, MB_ICONWARNING);
-        }
+        if (g_trayIconAdded) ShowWindow(hwnd, SW_HIDE);
+        else ShowWindow(hwnd, SW_MINIMIZE);
         return 0;
     case WM_DESTROY:
         RemoveTrayIcon();
         UnregisterHotKey(hwnd, HOTKEY_TOGGLE);
         UnregisterHotKey(hwnd, HOTKEY_INTERACTIVE);
+        if (g_browserController) g_browserController->Close();
+        if (g_uiController) g_uiController->Close();
         PostQuitMessage(0);
         return 0;
     }
-    return DefWindowProcW(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 }
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     LoadSettings();
-    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    Gdiplus::GdiplusStartupInput gdipInput;
-    Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdipInput, nullptr);
-    INITCOMMONCONTROLSEX controls{ sizeof(controls), ICC_BAR_CLASSES };
-    InitCommonControlsEx(&controls);
+    HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(comResult)) return 1;
 
-    g_font = MakeFont(9, false);
-    g_fontBold = MakeFont(10, true);
-    fs::path logoPath = ExecutableDirectory() / L"assets" / L"privalayer.png";
-    if (fs::exists(logoPath)) g_logo = Gdiplus::Image::FromFile(logoPath.c_str());
+    Gdiplus::GdiplusStartupInput gdiplusInput;
+    if (Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdiplusInput, nullptr) != Gdiplus::Ok) return 2;
+
+    INITCOMMONCONTROLSEX controls{ sizeof(controls), ICC_STANDARD_CLASSES };
+    InitCommonControlsEx(&controls);
 
     WNDCLASSEXW wc{ sizeof(wc) };
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = CreateSolidBrush(kDark.bg);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     wc.lpszClassName = kClassName;
     g_appIcon = LoadIconW(instance, MAKEINTRESOURCEW(101));
     wc.hIcon = g_appIcon;
     wc.hIconSm = g_appIcon;
     g_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
-    if (!RegisterClassExW(&wc)) return 1;
+    if (!RegisterClassExW(&wc)) {
+        Gdiplus::GdiplusShutdown(g_gdiplusToken);
+        CoUninitialize();
+        return 3;
+    }
 
-    DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_LAYERED;
-    HWND hwnd = CreateWindowExW(exStyle, kClassName, L"PrivaLayer — Personal Workspace",
-        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 790,
-        nullptr, nullptr, instance, nullptr);
-    if (!hwnd) return 2;
+    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED, kClassName,
+        L"PrivaLayer — Personal Workspace", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1460, 920, nullptr, nullptr, instance, nullptr);
+    if (!hwnd) {
+        Gdiplus::GdiplusShutdown(g_gdiplusToken);
+        CoUninitialize();
+        return 4;
+    }
     g_hwnd = hwnd;
     AddTrayIcon(hwnd);
-    SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(wc.hIcon));
-    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(wc.hIcon));
-    SetLayerOpacity();
+    SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(g_appIcon));
+    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(g_appIcon));
+    SetLayerOpacity(g_opacityValue);
     ShowWindow(hwnd, show);
     UpdateWindow(hwnd);
 
-    MSG msg{};
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+    MSG message{};
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
     }
 
-    if (g_webController) g_webController->Close();
-    g_webView.Reset(); g_webController.Reset(); g_webEnvironment.Reset();
-    if (g_logo) delete g_logo;
-    if (g_font) DeleteObject(g_font);
-    if (g_fontBold) DeleteObject(g_fontBold);
+    g_browserView.Reset();
+    g_browserController.Reset();
+    g_uiView.Reset();
+    g_uiController.Reset();
+    g_webEnvironment.Reset();
     if (g_gdiplusToken) Gdiplus::GdiplusShutdown(g_gdiplusToken);
     CoUninitialize();
-    return static_cast<int>(msg.wParam);
+    return static_cast<int>(message.wParam);
 }

@@ -83,6 +83,9 @@ add_custom_command(TARGET PrivaLayer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/privalayer.png"
         "$<TARGET_FILE_DIR:PrivaLayer>/assets/privalayer.png"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/ui"
+        "$<TARGET_FILE_DIR:PrivaLayer>/assets/ui"
     VERBATIM
 )
 

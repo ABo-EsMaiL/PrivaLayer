@@ -1,6 +1,7 @@
 name: Build PrivaLayer
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -18,4 +19,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PrivaLayer-x64
-          path: build/Release/PrivaLayer.exe
+          path: |
+            build/Release/PrivaLayer.exe
+            build/Release/assets/
