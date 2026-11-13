@@ -105,7 +105,7 @@ std::wstring ReadLegacyNotes() {
     bytes.resize(read);
     if (bytes.size() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
         size_t chars = (bytes.size() - 2) / sizeof(wchar_t);
-        std::wstring result(chars, L'\\0');
+        std::wstring result(chars, L'\0');
         if (chars) memcpy(result.data(), bytes.data() + 2, chars * sizeof(wchar_t));
         return result;
     }
@@ -248,10 +248,6 @@ void AddTrayIcon(HWND hwnd) {
     g_trayData.hIcon = g_appIcon ? g_appIcon : LoadIconW(nullptr, IDI_APPLICATION);
     wcscpy_s(g_trayData.szTip, L"PrivaLayer — Personal Workspace");
     g_trayIconAdded = Shell_NotifyIconW(NIM_ADD, &g_trayData) == TRUE;
-    if (g_trayIconAdded) {
-        g_trayData.uVersion = NOTIFYICON_VERSION_4;
-        Shell_NotifyIconW(NIM_SETVERSION, &g_trayData);
-    }
 }
 
 void RemoveTrayIcon() {
