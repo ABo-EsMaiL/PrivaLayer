@@ -1,0 +1,21 @@
+name: Build PrivaLayer
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run build script
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrivaLayer-x64
+          path: build/Release/PrivaLayer.exe
