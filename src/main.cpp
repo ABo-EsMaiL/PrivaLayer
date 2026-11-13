@@ -342,7 +342,7 @@ void LayoutBrowser() {
     RECT client{};
     GetClientRect(g_hwnd, &client);
     const LONG left = g_sidebarCollapsed ? 114L : 286L;
-    RECT bounds{ left, 270, std::max(left + 120L, client.right - 38L),
+    RECT bounds{ left, 280, std::max(left + 120L, client.right - 38L),
                  std::max(240L, client.bottom - 28L) };
     for (const auto& tab : g_browserTabs) {
         if (!tab || !tab->controller || tab->closed) continue;
@@ -367,7 +367,7 @@ void ActivateBrowserTab(int id) {
 
 void NavigateBrowser(int id, const std::wstring& url) {
     BrowserTab* tab = FindBrowserTab(id);
-    if (!tab || tab->closed || !tab->view || url.empty()) return;
+    if (!tab || tab->closed || url.empty()) return;
     std::wstring target = url;
     if (target.find(L"://") == std::wstring::npos) {
         if (target.find(L' ') != std::wstring::npos) {
@@ -378,7 +378,8 @@ void NavigateBrowser(int id, const std::wstring& url) {
             target = L"https://" + target;
         }
     }
-    tab->view->Navigate(target.c_str());
+    tab->url = target;
+    if (tab->view) tab->view->Navigate(target.c_str());
 }
 
 void NavigateBrowser(const std::wstring& url) {
@@ -401,7 +402,8 @@ void CreateBrowserTab(const std::wstring& initialUrl) {
         Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
             [raw](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                 if (FAILED(result) || !controller || raw->closed) {
-                    PostToUi(L"browser-tab-error|" + std::to_wstring(raw->id));
+                    if (controller) controller->Close();
+                    if (!raw->closed) PostToUi(L"browser-tab-error|" + std::to_wstring(raw->id));
                     return S_OK;
                 }
                 raw->controller = controller;
