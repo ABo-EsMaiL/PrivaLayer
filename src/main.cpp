@@ -444,8 +444,18 @@ void CreateBrowserTab(const std::wstring& initialUrl) {
                 raw->controller->put_IsVisible(g_browserVisible && raw->id == g_activeBrowserTabId ? TRUE : FALSE);
                 raw->view->Navigate(raw->url.c_str());
                 ActivateBrowserTab(raw->id);
+                PostToUi(L"browser-tab-pending|" + std::to_wstring(raw->id) + L"|Loading");
                 return S_OK;
             }).Get());
+}
+
+void PostBrowserTabSnapshot() {
+    for (const auto& tab : g_browserTabs) {
+        if (!tab || tab->closed) continue;
+        PostToUi(L"browser-tab-pending|" + std::to_wstring(tab->id) + L"|" + SafeUiField(tab->title));
+        if (tab->ready) PostBrowserTabState(tab.get());
+        if (tab->id == g_activeBrowserTabId) PostToUi(L"browser-tab-active|" + std::to_wstring(tab->id));
+    }
 }
 
 void CloseBrowserTab(int id) {
@@ -727,6 +737,7 @@ void EnsureWebViews() {
                                                 PostToUi(state);
                                                 std::wstring oldNote = ReadLegacyNotes();
                                                 if (!oldNote.empty()) PostToUi(std::wstring(L"legacy-note|") + oldNote);
+                                                PostBrowserTabSnapshot();
                                                 return S_OK;
                                             }).Get(), nullptr);
                                     g_uiView->Navigate(url.data());
