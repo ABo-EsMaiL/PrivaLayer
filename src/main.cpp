@@ -36,6 +36,8 @@ constexpr UINT ID_TRAY_OPEN = 9101;
 constexpr UINT ID_TRAY_SETTINGS = 9102;
 constexpr UINT ID_TRAY_EXIT = 9103;
 constexpr UINT kTrayIconId = 1;
+constexpr DWORD kWdaExcludeFromCapture = 0x00000011;
+constexpr DWORD kWdaNone = 0x00000000;
 constexpr int HOTKEY_TOGGLE = 1;
 constexpr int HOTKEY_INTERACTIVE = 2;
 constexpr int HOTKEY_CAPTURE = 3;
@@ -51,6 +53,8 @@ UINT g_taskbarCreatedMessage = 0;
 bool g_isTopmost = true;
 bool g_isPassthrough = false;
 bool g_sidebarCollapsed = false;
+bool g_captureExclusionEnabled = true;
+bool g_captureExclusionActive = false;
 int g_opacityValue = 96;
 std::wstring g_toggleHotkey = kDefaultToggleHotkey;
 std::wstring g_interactiveHotkey = kDefaultInteractiveHotkey;
@@ -142,6 +146,7 @@ void LoadSettings() {
     g_opacityValue = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Appearance", L"Opacity", 96, path.c_str())), 45, 100);
     g_isTopmost = GetPrivateProfileIntW(L"Window", L"Topmost", 1, path.c_str()) != 0;
     g_isPassthrough = GetPrivateProfileIntW(L"Window", L"PassThrough", 0, path.c_str()) != 0;
+    g_captureExclusionEnabled = GetPrivateProfileIntW(L"Privacy", L"ExcludeFromCapture", 1, path.c_str()) != 0;
     wchar_t value[128]{};
     GetPrivateProfileStringW(L"Hotkeys", L"Toggle", kDefaultToggleHotkey, value, 128, path.c_str());
     g_toggleHotkey = value;
@@ -181,6 +186,27 @@ void SetPassThrough(bool enabled) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     }
     SaveInteger(L"Window", L"PassThrough", enabled ? 1 : 0);
+}
+
+void SetCaptureExclusion(bool enabled) {
+    g_captureExclusionEnabled = enabled;
+    BOOL applied = FALSE;
+    DWORD errorCode = ERROR_SUCCESS;
+    if (g_hwnd) {
+        applied = SetWindowDisplayAffinity(g_hwnd,
+            enabled ? kWdaExcludeFromCapture : kWdaNone);
+        if (!applied) errorCode = GetLastError();
+    }
+    g_captureExclusionActive = enabled && applied != FALSE;
+    SaveInteger(L"Privacy", L"ExcludeFromCapture", enabled ? 1 : 0);
+
+    if (g_uiView) {
+        wchar_t message[128]{};
+        swprintf_s(message, L"capture-exclusion|%d|%d|%lu",
+            enabled ? 1 : 0, g_captureExclusionActive ? 1 : 0,
+            static_cast<unsigned long>(errorCode));
+        PostToUi(message);
+    }
 }
 
 std::vector<std::wstring> Split(const std::wstring& value, wchar_t separator) {
@@ -696,6 +722,7 @@ void HandleWebMessage(const std::wstring& message) {
     if (action == L"opacity" && parts.size() > 1) SetLayerOpacity(_wtoi(parts[1].c_str()));
     else if (action == L"topmost" && parts.size() > 1) SetTopmost(parts[1] == L"1");
     else if (action == L"passthrough" && parts.size() > 1) SetPassThrough(parts[1] == L"1");
+    else if (action == L"capture-exclusion" && parts.size() > 1) SetCaptureExclusion(parts[1] == L"1");
     else if (action == L"hotkeys" && parts.size() > 3) ApplyHotkeys(parts[1], parts[2], parts[3], true);
     else if (action == L"capture-screen") CaptureScreenNow();
     else if (action == L"capture-folder") OpenCaptureFolder();
@@ -780,9 +807,10 @@ void EnsureWebViews() {
                                                     return S_OK;
                                                 }
                                                 wchar_t state[512]{};
-                                                swprintf_s(state, L"native-settings|%d|%d|%d|%s|%s|%s",
+                                                swprintf_s(state, L"native-settings|%d|%d|%d|%s|%s|%s|%d|%d",
                                                     g_opacityValue, g_isTopmost ? 1 : 0, g_isPassthrough ? 1 : 0,
-                                                    g_toggleHotkey.c_str(), g_interactiveHotkey.c_str(), g_captureHotkey.c_str());
+                                                    g_toggleHotkey.c_str(), g_interactiveHotkey.c_str(), g_captureHotkey.c_str(),
+                                                    g_captureExclusionEnabled ? 1 : 0, g_captureExclusionActive ? 1 : 0);
                                                 PostToUi(state);
                                                 std::wstring oldNote = ReadLegacyNotes();
                                                 if (!oldNote.empty()) PostToUi(std::wstring(L"legacy-note|") + oldNote);
@@ -825,6 +853,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         SetLayerOpacity(g_opacityValue);
         SetTopmost(g_isTopmost);
         SetPassThrough(g_isPassthrough);
+        SetCaptureExclusion(g_captureExclusionEnabled);
         return 0;
     }
     case WM_SIZE:
