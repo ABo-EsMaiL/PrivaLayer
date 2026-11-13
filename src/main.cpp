@@ -354,7 +354,7 @@ void LayoutBrowser() {
     // Keep the real browser content in its own child window above the
     // full-window workspace WebView2 surface.
     SetWindowPos(g_browserHostHwnd, HWND_TOP, left, top, width, height,
-        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SWP_NOACTIVATE);
     ShowWindow(g_browserHostHwnd, g_browserVisible ? SW_SHOWNA : SW_HIDE);
 
     RECT tabBounds{ 0, 0, width, height };
