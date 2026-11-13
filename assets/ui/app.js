@@ -6,10 +6,34 @@ home:'<path d="m3 10 9-7 9 7"/><path d="M5 9v12h14V9M9 21v-7h6v7"/>',
 close:'<path d="m18 6-12 12M6 6l12 12"/>'};
 $$('[data-icon]').forEach(e=>{const p=icons[e.dataset.icon];if(p)e.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true">'+p+'</svg>';});
 const shell=$('#appShell');let page='home',collapsed=localStorage.getItem('pl-collapsed')==='1';
+// Compact Pomodoro timer. It runs independently of page navigation.
+const FOCUS_SECONDS=25*60;
+let focusRemaining=FOCUS_SECONDS, focusInterval=null, focusRunning=false;
+function renderFocus(){
+ const mins=Math.floor(focusRemaining/60),secs=focusRemaining%60;
+ $('#focusTime').textContent=String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');
+ const progress=(FOCUS_SECONDS-focusRemaining)/FOCUS_SECONDS;
+ $('#focusRing').style.setProperty('--progress',String(progress));
+ $('#focusStatus').textContent=focusRunning?'FOCUS IN PROGRESS':focusRemaining===0?'SESSION COMPLETE':'READY TO FOCUS';
+ $('#focusStart').innerHTML=(focusRunning?'<svg viewBox="0 0 24 24"><path d="M8 5h3v14H8zM15 5h3v14h-3z"/></svg> Pause focus':'<svg viewBox="0 0 24 24"><path d="m8 5 12 7-12 7z"/></svg> '+(focusRemaining===FOCUS_SECONDS?'Start focus':'Resume focus'));
+}
+function stopFocus(){clearInterval(focusInterval);focusInterval=null;focusRunning=false;}
+$('#focusStart').addEventListener('click',()=>{
+ if(focusRunning){stopFocus();renderFocus();return;}
+ if(focusRemaining===0)focusRemaining=FOCUS_SECONDS;
+ focusRunning=true;renderFocus();
+ focusInterval=setInterval(()=>{
+  if(focusRemaining>0){focusRemaining--;renderFocus();}
+  if(focusRemaining===0){stopFocus();renderFocus();toast('Focus session complete — take a short break');$('#focusTip').textContent='You did the work. Take a breath before the next sprint.';}
+ },1000);
+});
+$('#focusReset').addEventListener('click',()=>{stopFocus();focusRemaining=FOCUS_SECONDS;$('#focusTip').textContent='Silence the noise. Pick one task. Begin.';renderFocus();});
+renderFocus();
 function toast(s){$('#toastText').textContent=s;$('#toast').classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>$('#toast').classList.remove('show'),2300);}
 function setCollapsed(v){collapsed=v;shell.classList.toggle('sidebar-collapsed',v);localStorage.setItem('pl-collapsed',v?'1':'0');send('sidebar-collapsed|'+(v?'1':'0'));}
 function navigate(p){if(!$('#page-'+p))return;page=p;$$('.page').forEach(e=>e.classList.toggle('visible',e.id==='page-'+p));$$('.nav-item[data-page]').forEach(e=>e.classList.toggle('active',e.dataset.page===p));const names={home:'Overview',notes:'Notes',browser:'Browser',assistant:'AI assistant',workspace:'Workspace',settings:'Preferences'};$('#pageCrumb').textContent=names[p];send(p==='browser'?'browser-show':'browser-hide');}
-setCollapsed(collapsed);$$('[data-page]').forEach(e=>e.addEventListener('click',()=>navigate(e.dataset.page)));$$('[data-go]').forEach(e=>e.addEventListener('click',()=>navigate(e.dataset.go)));$('#sidebarCollapse').addEventListener('click',()=>setCollapsed(!collapsed));$('#hideWindow').addEventListener('click',()=>send('window-hide'));$('#minimizeWindow').addEventListener('click',()=>send('window-minimize'));$('#quickCapture').addEventListener('click',()=>{navigate('assistant');send('capture-screen');});
+setCollapsed(collapsed);$$('[data-page]').forEach(e=>e.addEventListener('click',()=>navigate(e.dataset.page)));$$('[data-go]').forEach(e=>e.addEventListener('click',()=>navigate(e.dataset.go)));$('#sidebarCollapse').addEventListener('click',()=>setCollapsed(!collapsed));$('#hideWindow').addEventListener('click',()=>send('window-hide'));$('#minimizeWindow').addEventListener('click',()=>send('window-minimize'));$('#quickCapture').addEventListener('click',()=>send('capture-screen'));
+$('#quickCaptureHome').addEventListener('click',()=>send('capture-screen'));
 $('#startCapture').addEventListener('click',()=>send('capture-screen'));
 $('#importCapture').addEventListener('click',()=>send('capture-folder'));
 $('#openCaptures').addEventListener('click',()=>send('capture-folder'));
