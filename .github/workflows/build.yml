@@ -11,6 +11,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Validate workspace JavaScript
+        shell: pwsh
+        run: node --check assets/ui/app.js
+
       - name: Run build script
         shell: pwsh
         run: .\build.ps1
