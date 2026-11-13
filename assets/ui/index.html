@@ -69,9 +69,11 @@
 <div class="shortcut-help"><span data-icon="keyboard"></span><p>Use different combinations such as <b>CTRL+SHIFT+SPACE</b>, <b>ALT+F9</b> or <b>CTRL+ALT+P</b>. The first key must be a modifier.</p></div>
 <div class="shortcut-actions"><small id="shortcutFeedback">Changes apply after saving.</small><button class="btn primary" id="saveHotkeys">Save shortcuts</button></div></div>
 <div class="settings-panel" id="settings-privacy"><div class="settings-title"><div><h2>Privacy &amp; data</h2><p>Know where your information lives.</p></div><span>04</span></div>
+<div class="setting-row capture-exclusion-row"><div><b>Exclude PrivaLayer from supported captures</b><small>Keep it visible on your monitor while Windows omits it from supported screen-capture APIs.</small></div><button class="switch on" id="excludeCaptureSwitch" role="switch" aria-checked="true"><i></i></button></div>
+<div class="capture-protection-status" id="captureExclusionStatus"><span class="status-pill pending"><i></i> CHECKING WINDOWS PROTECTION</span><small>Windows display-affinity status will appear here.</small></div>
 <div class="privacy-card"><span data-icon="shield-check"></span><div><b>Stored on this device</b><p>Your notes and preferences are saved locally in your Windows user profile. The embedded browser uses its own WebView2 profile.</p></div></div>
 <div class="privacy-paths"><div><span>Notes &amp; preferences</span><code>%LOCALAPPDATA%\PrivaLayer</code></div><div><span>Imported captures</span><code>Pictures\PrivaLayer</code></div><div><span>Browser profile</span><code>WebView2Data</code></div></div>
-<div class="setting-note warning"><span data-icon="alert"></span><p>Transparency and click-through are desktop conveniences, not a guarantee that the window is excluded from meeting apps, screen sharing or recording.</p></div></div>
+<div class="setting-note warning"><span data-icon="alert"></span><p>This uses Windows WDA_EXCLUDEFROMCAPTURE. It is not a guarantee: Discord can use multiple capture methods, and some may not honor Windows display affinity. Test the exact share mode before relying on it.</p></div></div>
 </div></div></section>
 <footer class="app-footer"><span>PRIVALAYER <i>·</i> BUILT FOR FOCUS</span><span><b></b> RUNNING LOCALLY</span></footer></main></div>
 <div class="toast" id="toast"><span data-icon="check"></span><b id="toastText">Saved</b></div><script src="app.js"></script></body></html>
