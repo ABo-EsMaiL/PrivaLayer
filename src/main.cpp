@@ -345,7 +345,7 @@ void LayoutBrowser() {
     RECT client{};
     GetClientRect(g_hwnd, &client);
     const LONG left = g_sidebarCollapsed ? 114L : 286L;
-    const LONG top = 264L;
+    const LONG top = 280L;
     const LONG right = std::max(left + 120L, client.right - 38L);
     const LONG bottom = std::max(top + 160L, client.bottom - 54L);
     const int width = static_cast<int>(right - left);
