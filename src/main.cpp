@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <memory>
 #include <algorithm>
 #include <cwctype>
 #include <cstdlib>
@@ -35,8 +36,10 @@ constexpr UINT ID_TRAY_EXIT = 9103;
 constexpr UINT kTrayIconId = 1;
 constexpr int HOTKEY_TOGGLE = 1;
 constexpr int HOTKEY_INTERACTIVE = 2;
+constexpr int HOTKEY_CAPTURE = 3;
 constexpr wchar_t kDefaultToggleHotkey[] = L"CTRL+ALT+SPACE";
 constexpr wchar_t kDefaultInteractiveHotkey[] = L"CTRL+ALT+I";
+constexpr wchar_t kDefaultCaptureHotkey[] = L"CTRL+ALT+P";
 
 HWND g_hwnd = nullptr;
 HICON g_appIcon = nullptr;
@@ -49,14 +52,26 @@ bool g_sidebarCollapsed = false;
 int g_opacityValue = 96;
 std::wstring g_toggleHotkey = kDefaultToggleHotkey;
 std::wstring g_interactiveHotkey = kDefaultInteractiveHotkey;
+std::wstring g_captureHotkey = kDefaultCaptureHotkey;
 std::wstring g_lastCapturePath;
 ULONG_PTR g_gdiplusToken = 0;
 
 ComPtr<ICoreWebView2Environment> g_webEnvironment;
 ComPtr<ICoreWebView2Controller> g_uiController;
 ComPtr<ICoreWebView2> g_uiView;
-ComPtr<ICoreWebView2Controller> g_browserController;
-ComPtr<ICoreWebView2> g_browserView;
+
+struct BrowserTab {
+    int id = 0;
+    bool closed = false;
+    bool ready = false;
+    ComPtr<ICoreWebView2Controller> controller;
+    ComPtr<ICoreWebView2> view;
+    std::wstring url;
+    std::wstring title = L"New tab";
+};
+std::vector<std::unique_ptr<BrowserTab>> g_browserTabs;
+int g_nextBrowserTabId = 1;
+int g_activeBrowserTabId = 0;
 bool g_browserVisible = false;
 
 std::wstring GetKnownFolder(REFKNOWNFOLDERID id) {
@@ -129,6 +144,8 @@ void LoadSettings() {
     g_toggleHotkey = value;
     GetPrivateProfileStringW(L"Hotkeys", L"Interactive", kDefaultInteractiveHotkey, value, 128, path.c_str());
     g_interactiveHotkey = value;
+    GetPrivateProfileStringW(L"Hotkeys", L"Capture", kDefaultCaptureHotkey, value, 128, path.c_str());
+    g_captureHotkey = value;
 }
 
 void SaveInteger(const wchar_t* section, const wchar_t* key, int value) {
@@ -204,31 +221,44 @@ bool ParseHotkey(const std::wstring& specification, UINT& modifiers, UINT& key) 
     return hasModifier && hasKey && key != 0;
 }
 
-bool ApplyHotkeys(const std::wstring& toggle, const std::wstring& interactive, bool notify) {
+bool ApplyHotkeys(const std::wstring& toggle, const std::wstring& interactive,
+                  const std::wstring& capture, bool notify) {
     UINT toggleMods = 0, toggleKey = 0, interactiveMods = 0, interactiveKey = 0;
-    bool valid = ParseHotkey(toggle, toggleMods, toggleKey) && ParseHotkey(interactive, interactiveMods, interactiveKey);
+    UINT captureMods = 0, captureKey = 0;
+    bool valid = ParseHotkey(toggle, toggleMods, toggleKey) &&
+                 ParseHotkey(interactive, interactiveMods, interactiveKey) &&
+                 ParseHotkey(capture, captureMods, captureKey);
     UnregisterHotKey(g_hwnd, HOTKEY_TOGGLE);
     UnregisterHotKey(g_hwnd, HOTKEY_INTERACTIVE);
+    UnregisterHotKey(g_hwnd, HOTKEY_CAPTURE);
     bool registered = valid &&
         RegisterHotKey(g_hwnd, HOTKEY_TOGGLE, toggleMods, toggleKey) &&
-        RegisterHotKey(g_hwnd, HOTKEY_INTERACTIVE, interactiveMods, interactiveKey);
+        RegisterHotKey(g_hwnd, HOTKEY_INTERACTIVE, interactiveMods, interactiveKey) &&
+        RegisterHotKey(g_hwnd, HOTKEY_CAPTURE, captureMods, captureKey);
     if (!registered) {
         UnregisterHotKey(g_hwnd, HOTKEY_TOGGLE);
         UnregisterHotKey(g_hwnd, HOTKEY_INTERACTIVE);
-        UINT dm = 0, dk = 0, im = 0, ik = 0;
+        UnregisterHotKey(g_hwnd, HOTKEY_CAPTURE);
+        UINT dm = 0, dk = 0, im = 0, ik = 0, cm = 0, ck = 0;
         ParseHotkey(kDefaultToggleHotkey, dm, dk);
         ParseHotkey(kDefaultInteractiveHotkey, im, ik);
+        ParseHotkey(kDefaultCaptureHotkey, cm, ck);
         RegisterHotKey(g_hwnd, HOTKEY_TOGGLE, dm, dk);
         RegisterHotKey(g_hwnd, HOTKEY_INTERACTIVE, im, ik);
+        RegisterHotKey(g_hwnd, HOTKEY_CAPTURE, cm, ck);
         g_toggleHotkey = kDefaultToggleHotkey;
         g_interactiveHotkey = kDefaultInteractiveHotkey;
-        if (notify && g_uiView) g_uiView->PostWebMessageAsString(L"hotkeys-result|error|CTRL+ALT+SPACE|CTRL+ALT+I");
+        g_captureHotkey = kDefaultCaptureHotkey;
+        if (notify && g_uiView) g_uiView->PostWebMessageAsString(
+            L"hotkeys-result|error|CTRL+ALT+SPACE|CTRL+ALT+I|CTRL+ALT+P");
         return false;
     }
     g_toggleHotkey = toggle;
     g_interactiveHotkey = interactive;
+    g_captureHotkey = capture;
     WritePrivateProfileStringW(L"Hotkeys", L"Toggle", toggle.c_str(), SettingsPath().c_str());
     WritePrivateProfileStringW(L"Hotkeys", L"Interactive", interactive.c_str(), SettingsPath().c_str());
+    WritePrivateProfileStringW(L"Hotkeys", L"Capture", capture.c_str(), SettingsPath().c_str());
     if (notify && g_uiView) g_uiView->PostWebMessageAsString(L"hotkeys-result|ok");
     return true;
 }
@@ -283,12 +313,175 @@ void ShowTrayContextMenu(HWND hwnd) {
     PostMessageW(hwnd, WM_NULL, 0, 0);
 }
 
+BrowserTab* FindBrowserTab(int id) {
+    for (const auto& tab : g_browserTabs) {
+        if (tab && tab->id == id) return tab.get();
+    }
+    return nullptr;
+}
+
+BrowserTab* ActiveBrowserTab() {
+    return FindBrowserTab(g_activeBrowserTabId);
+}
+
+std::wstring SafeUiField(std::wstring value) {
+    std::replace(value.begin(), value.end(), L'|', L'/');
+    std::replace(value.begin(), value.end(), L'\r', L' ');
+    std::replace(value.begin(), value.end(), L'\n', L' ');
+    return value;
+}
+
+void PostBrowserTabState(const BrowserTab* tab) {
+    if (!tab || tab->closed) return;
+    PostToUi(L"browser-tab-state|" + std::to_wstring(tab->id) + L"|" +
+        SafeUiField(tab->title) + L"|" + SafeUiField(tab->url));
+}
+
 void LayoutBrowser() {
-    if (!g_browserController || !g_hwnd) return;
+    if (!g_hwnd) return;
     RECT client{};
     GetClientRect(g_hwnd, &client);
-    RECT bounds{ g_sidebarCollapsed ? 76L : 248L, 160, std::max(g_sidebarCollapsed ? 96L : 270L, client.right - 22), std::max(180L, client.bottom - 22) };
-    g_browserController->put_Bounds(bounds);
+    const LONG left = g_sidebarCollapsed ? 114L : 286L;
+    RECT bounds{ left, 226, std::max(left + 120L, client.right - 38L),
+                 std::max(240L, client.bottom - 28L) };
+    for (const auto& tab : g_browserTabs) {
+        if (!tab || !tab->controller || tab->closed) continue;
+        tab->controller->put_Bounds(bounds);
+        tab->controller->put_IsVisible(g_browserVisible && tab->id == g_activeBrowserTabId ? TRUE : FALSE);
+    }
+}
+
+void SetBrowserVisible(bool visible) {
+    g_browserVisible = visible;
+    LayoutBrowser();
+}
+
+void ActivateBrowserTab(int id) {
+    BrowserTab* tab = FindBrowserTab(id);
+    if (!tab || tab->closed) return;
+    g_activeBrowserTabId = id;
+    LayoutBrowser();
+    PostToUi(L"browser-tab-active|" + std::to_wstring(id));
+    PostBrowserTabState(tab);
+}
+
+void NavigateBrowser(int id, const std::wstring& url) {
+    BrowserTab* tab = FindBrowserTab(id);
+    if (!tab || tab->closed || !tab->view || url.empty()) return;
+    std::wstring target = url;
+    if (target.find(L"://") == std::wstring::npos) {
+        if (target.find(L' ') != std::wstring::npos) {
+            std::wstring query = target;
+            target = L"https://www.google.com/search?q=";
+            for (wchar_t ch : query) target += (ch == L' ') ? L'+' : ch;
+        } else {
+            target = L"https://" + target;
+        }
+    }
+    tab->view->Navigate(target.c_str());
+}
+
+void NavigateBrowser(const std::wstring& url) {
+    BrowserTab* tab = ActiveBrowserTab();
+    if (tab) NavigateBrowser(tab->id, url);
+}
+
+void CreateBrowserTab(const std::wstring& initialUrl) {
+    if (!g_webEnvironment || !g_hwnd) return;
+    auto tab = std::make_unique<BrowserTab>();
+    tab->id = g_nextBrowserTabId++;
+    tab->url = initialUrl.empty() ? L"about:blank" : initialUrl;
+    tab->title = L"Loading…";
+    BrowserTab* raw = tab.get();
+    g_browserTabs.push_back(std::move(tab));
+    g_activeBrowserTabId = raw->id;
+    PostToUi(L"browser-tab-pending|" + std::to_wstring(raw->id) + L"|Loading…");
+    LayoutBrowser();
+    g_webEnvironment->CreateCoreWebView2Controller(g_hwnd,
+        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+            [raw](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                if (FAILED(result) || !controller || raw->closed) {
+                    PostToUi(L"browser-tab-error|" + std::to_wstring(raw->id));
+                    return S_OK;
+                }
+                raw->controller = controller;
+                raw->controller->get_CoreWebView2(&raw->view);
+                if (!raw->view) {
+                    raw->closed = true;
+                    return S_OK;
+                }
+                raw->ready = true;
+                raw->view->add_NavigationCompleted(
+                    Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                        [raw](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
+                            if (!sender || raw->closed) return S_OK;
+                            LPWSTR source = nullptr;
+                            LPWSTR title = nullptr;
+                            if (SUCCEEDED(sender->get_Source(&source)) && source) {
+                                raw->url = source;
+                                CoTaskMemFree(source);
+                            }
+                            if (SUCCEEDED(sender->get_DocumentTitle(&title)) && title) {
+                                raw->title = title[0] ? title : L"New tab";
+                                CoTaskMemFree(title);
+                            }
+                            PostBrowserTabState(raw);
+                            return S_OK;
+                        }).Get(), nullptr);
+                raw->view->add_DocumentTitleChanged(
+                    Callback<ICoreWebView2DocumentTitleChangedEventHandler>(
+                        [raw](ICoreWebView2* sender, IUnknown*) -> HRESULT {
+                            if (!sender || raw->closed) return S_OK;
+                            LPWSTR title = nullptr;
+                            if (SUCCEEDED(sender->get_DocumentTitle(&title)) && title) {
+                                raw->title = title[0] ? title : L"New tab";
+                                CoTaskMemFree(title);
+                            }
+                            PostBrowserTabState(raw);
+                            return S_OK;
+                        }).Get(), nullptr);
+                LayoutBrowser();
+                raw->controller->put_IsVisible(g_browserVisible && raw->id == g_activeBrowserTabId ? TRUE : FALSE);
+                raw->view->Navigate(raw->url.c_str());
+                ActivateBrowserTab(raw->id);
+                return S_OK;
+            }).Get());
+}
+
+void CloseBrowserTab(int id) {
+    BrowserTab* tab = FindBrowserTab(id);
+    if (!tab || tab->closed) return;
+    tab->closed = true;
+    if (tab->controller) tab->controller->put_IsVisible(FALSE);
+    if (tab->controller) tab->controller->Close();
+    tab->view.Reset();
+    tab->controller.Reset();
+    PostToUi(L"browser-tab-closed|" + std::to_wstring(id));
+    if (g_activeBrowserTabId == id) {
+        g_activeBrowserTabId = 0;
+        for (auto it = g_browserTabs.rbegin(); it != g_browserTabs.rend(); ++it) {
+            if (*it && !(*it)->closed) { g_activeBrowserTabId = (*it)->id; break; }
+        }
+        if (g_activeBrowserTabId == 0) {
+            CreateBrowserTab(L"https://www.google.com/");
+        } else {
+            ActivateBrowserTab(g_activeBrowserTabId);
+        }
+    }
+    LayoutBrowser();
+}
+
+void BrowserGoBack(int id) {
+    BrowserTab* tab = FindBrowserTab(id);
+    if (tab && tab->view) { BOOL can = FALSE; tab->view->get_CanGoBack(&can); if (can) tab->view->GoBack(); }
+}
+void BrowserGoForward(int id) {
+    BrowserTab* tab = FindBrowserTab(id);
+    if (tab && tab->view) { BOOL can = FALSE; tab->view->get_CanGoForward(&can); if (can) tab->view->GoForward(); }
+}
+void BrowserReload(int id) {
+    BrowserTab* tab = FindBrowserTab(id);
+    if (tab && tab->view) tab->view->Reload();
 }
 
 void LayoutWorkspace() {
@@ -339,71 +532,97 @@ int GetPngEncoderClsid(CLSID* clsid) {
     return -1;
 }
 
-bool SaveClipboardBitmap(const fs::path& path) {
-    if (!OpenClipboard(g_hwnd)) return false;
-    HBITMAP bitmapHandle = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP));
-    bool ownsBitmap = false;
-    HGLOBAL dibMemory = nullptr;
-    void* dibData = nullptr;
-    if (!bitmapHandle) {
-        UINT format = IsClipboardFormatAvailable(CF_DIBV5) ? CF_DIBV5 : CF_DIB;
-        dibMemory = static_cast<HGLOBAL>(GetClipboardData(format));
-        if (dibMemory) {
-            dibData = GlobalLock(dibMemory);
-            if (dibData) {
-                auto* header = static_cast<BITMAPINFOHEADER*>(dibData);
-                BYTE* pixels = static_cast<BYTE*>(dibData) + header->biSize;
-                if (header->biCompression == BI_BITFIELDS && header->biSize == sizeof(BITMAPINFOHEADER)) pixels += 3 * sizeof(DWORD);
-                else if (header->biBitCount <= 8) {
-                    DWORD colors = header->biClrUsed ? header->biClrUsed : (1u << header->biBitCount);
-                    pixels += colors * sizeof(RGBQUAD);
-                }
-                HDC screen = GetDC(nullptr);
-                if (screen) {
-                    bitmapHandle = CreateDIBitmap(screen, header, CBM_INIT, pixels,
-                        reinterpret_cast<BITMAPINFO*>(dibData), DIB_RGB_COLORS);
-                    ReleaseDC(nullptr, screen);
-                    ownsBitmap = bitmapHandle != nullptr;
-                }
-            }
-        }
-    }
-    bool saved = false;
-    if (bitmapHandle) {
-        CLSID png{};
-        Gdiplus::Bitmap bitmap(bitmapHandle, nullptr);
-        saved = GetPngEncoderClsid(&png) >= 0 && bitmap.GetLastStatus() == Gdiplus::Ok &&
-            bitmap.Save(path.c_str(), &png, nullptr) == Gdiplus::Ok;
-    }
-    if (ownsBitmap && bitmapHandle) DeleteObject(bitmapHandle);
-    if (dibData) GlobalUnlock(dibMemory);
-    CloseClipboard();
-    return saved;
+HGLOBAL CreateDibClipboardBlock(HBITMAP bitmap, HDC screenDc) {
+    BITMAP object{};
+    if (!bitmap || GetObjectW(bitmap, sizeof(object), &object) == 0 || object.bmWidth <= 0 || object.bmHeight <= 0) return nullptr;
+    BITMAPINFOHEADER header{};
+    header.biSize = sizeof(BITMAPINFOHEADER);
+    header.biWidth = object.bmWidth;
+    header.biHeight = object.bmHeight;
+    header.biPlanes = 1;
+    header.biBitCount = 32;
+    header.biCompression = BI_RGB;
+    header.biSizeImage = static_cast<DWORD>(object.bmWidth * object.bmHeight * 4ULL);
+    const SIZE_T total = sizeof(BITMAPINFOHEADER) + header.biSizeImage;
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, total);
+    if (!memory) return nullptr;
+    BYTE* data = static_cast<BYTE*>(GlobalLock(memory));
+    if (!data) { GlobalFree(memory); return nullptr; }
+    memcpy(data, &header, sizeof(header));
+    BITMAPINFO* info = reinterpret_cast<BITMAPINFO*>(data);
+    int rows = GetDIBits(screenDc, bitmap, 0, static_cast<UINT>(object.bmHeight),
+        data + sizeof(BITMAPINFOHEADER), info, DIB_RGB_COLORS);
+    GlobalUnlock(memory);
+    if (rows == 0) { GlobalFree(memory); return nullptr; }
+    return memory;
 }
 
-void StartWindowsSnip() {
-    // Uses the official Windows snipping UI; the user selects the region manually.
-    ShowWindow(g_hwnd, SW_HIDE);
-    INPUT input[6]{};
-    input[0].type = INPUT_KEYBOARD; input[0].ki.wVk = VK_LWIN;
-    input[1].type = INPUT_KEYBOARD; input[1].ki.wVk = VK_SHIFT;
-    input[2].type = INPUT_KEYBOARD; input[2].ki.wVk = 'S';
-    input[3].type = INPUT_KEYBOARD; input[3].ki.wVk = 'S'; input[3].ki.dwFlags = KEYEVENTF_KEYUP;
-    input[4].type = INPUT_KEYBOARD; input[4].ki.wVk = VK_SHIFT; input[4].ki.dwFlags = KEYEVENTF_KEYUP;
-    input[5].type = INPUT_KEYBOARD; input[5].ki.wVk = VK_LWIN; input[5].ki.dwFlags = KEYEVENTF_KEYUP;
-    SendInput(6, input, sizeof(INPUT));
-    PostToUi(L"capture-started");
-}
+void CaptureScreenNow() {
+    const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (width <= 0 || height <= 0) {
+        PostToUi(L"capture-error|Windows could not determine the desktop size.");
+        return;
+    }
 
-void ImportCapture() {
+    HDC screenDc = GetDC(nullptr);
+    HDC memoryDc = screenDc ? CreateCompatibleDC(screenDc) : nullptr;
+    HBITMAP bitmap = (screenDc && memoryDc) ? CreateCompatibleBitmap(screenDc, width, height) : nullptr;
+    if (!screenDc || !memoryDc || !bitmap) {
+        if (bitmap) DeleteObject(bitmap);
+        if (memoryDc) DeleteDC(memoryDc);
+        if (screenDc) ReleaseDC(nullptr, screenDc);
+        PostToUi(L"capture-error|Unable to allocate a full-screen capture.");
+        return;
+    }
+
+    HGDIOBJ previous = SelectObject(memoryDc, bitmap);
+    BOOL copied = BitBlt(memoryDc, 0, 0, width, height, screenDc, x, y, SRCCOPY | CAPTUREBLT);
+    SelectObject(memoryDc, previous);
+    if (!copied) {
+        DeleteObject(bitmap);
+        DeleteDC(memoryDc);
+        ReleaseDC(nullptr, screenDc);
+        PostToUi(L"capture-error|Windows could not copy the desktop into the screenshot.");
+        return;
+    }
+
     fs::path path = CaptureFolder() / MakeCaptureName();
-    bool available = IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_DIBV5);
-    if (!available || !SaveClipboardBitmap(path)) {
-        PostToUi(L"capture-error|No image found in the clipboard. Finish the Windows snip, reopen PrivaLayer and import again.");
+    CLSID png{};
+    Gdiplus::Bitmap image(bitmap, nullptr);
+    bool saved = GetPngEncoderClsid(&png) >= 0 && image.GetLastStatus() == Gdiplus::Ok &&
+        image.Save(path.c_str(), &png, nullptr) == Gdiplus::Ok;
+
+    HGLOBAL dib = saved ? CreateDibClipboardBlock(bitmap, screenDc) : nullptr;
+    HBITMAP clipboardBitmap = saved ? static_cast<HBITMAP>(CopyImage(bitmap, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION)) : nullptr;
+    bool copiedToClipboard = false;
+    if (saved && dib && clipboardBitmap && OpenClipboard(g_hwnd)) {
+        EmptyClipboard();
+        HANDLE dibResult = SetClipboardData(CF_DIB, dib);
+        if (dibResult) dib = nullptr;
+        HANDLE bitmapResult = SetClipboardData(CF_BITMAP, clipboardBitmap);
+        if (bitmapResult) clipboardBitmap = nullptr;
+        CloseClipboard();
+        copiedToClipboard = dibResult != nullptr || bitmapResult != nullptr;
+    }
+    if (dib) GlobalFree(dib);
+    if (clipboardBitmap) DeleteObject(clipboardBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(memoryDc);
+    ReleaseDC(nullptr, screenDc);
+
+    if (!saved) {
+        PostToUi(L"capture-error|The screenshot file could not be saved.");
+        return;
+    }
+    if (!copiedToClipboard) {
+        PostToUi(L"capture-error|Screenshot saved, but Windows could not place it on the clipboard.");
         return;
     }
     g_lastCapturePath = path.wstring();
-    PostToUi(std::wstring(L"capture-saved|") + path.filename().wstring());
+    PostToUi(L"capture-saved|" + path.filename().wstring());
 }
 
 void OpenCaptureFolder() {
@@ -433,19 +652,22 @@ void HandleWebMessage(const std::wstring& message) {
     if (action == L"opacity" && parts.size() > 1) SetLayerOpacity(_wtoi(parts[1].c_str()));
     else if (action == L"topmost" && parts.size() > 1) SetTopmost(parts[1] == L"1");
     else if (action == L"passthrough" && parts.size() > 1) SetPassThrough(parts[1] == L"1");
-    else if (action == L"hotkeys" && parts.size() > 2) ApplyHotkeys(parts[1], parts[2], true);
-    else if (action == L"capture-start") StartWindowsSnip();
-    else if (action == L"capture-import") ImportCapture();
+    else if (action == L"hotkeys" && parts.size() > 3) ApplyHotkeys(parts[1], parts[2], parts[3], true);
+    else if (action == L"capture-screen") CaptureScreenNow();
     else if (action == L"capture-folder") OpenCaptureFolder();
     else if (action == L"sidebar-collapsed" && parts.size() > 1) { g_sidebarCollapsed = parts[1] == L"1"; LayoutBrowser(); }
     else if (action == L"browser-show") SetBrowserVisible(true);
     else if (action == L"browser-hide") SetBrowserVisible(false);
-    else if (action == L"browser-url" && parts.size() > 1) NavigateBrowser(parts[1]);
-    else if (action == L"browser-back" && g_browserView) g_browserView->GoBack();
-    else if (action == L"browser-forward" && g_browserView) g_browserView->GoForward();
+    else if (action == L"browser-new-tab") CreateBrowserTab(parts.size() > 1 && !parts[1].empty() ? parts[1] : L"https://www.google.com/");
+    else if (action == L"browser-switch" && parts.size() > 1) ActivateBrowserTab(_wtoi(parts[1].c_str()));
+    else if (action == L"browser-close" && parts.size() > 1) CloseBrowserTab(_wtoi(parts[1].c_str()));
+    else if (action == L"browser-url" && parts.size() > 2) NavigateBrowser(_wtoi(parts[1].c_str()), parts[2]);
+    else if (action == L"browser-back" && parts.size() > 1) BrowserGoBack(_wtoi(parts[1].c_str()));
+    else if (action == L"browser-forward" && parts.size() > 1) BrowserGoForward(_wtoi(parts[1].c_str()));
+    else if (action == L"browser-reload" && parts.size() > 1) BrowserReload(_wtoi(parts[1].c_str()));
     else if (action == L"browser-aistudio") {
         SetBrowserVisible(true);
-        NavigateBrowser(L"https://aistudio.google.com/");
+        CreateBrowserTab(L"https://aistudio.google.com/");
         PostToUi(L"navigate-page|browser");
     }
     else if (action == L"window-hide") ShowWindow(g_hwnd, SW_HIDE);
@@ -513,9 +735,9 @@ void EnsureWebViews() {
                                                     return S_OK;
                                                 }
                                                 wchar_t state[512]{};
-                                                swprintf_s(state, L"native-settings|%d|%d|%d|%s|%s",
+                                                swprintf_s(state, L"native-settings|%d|%d|%d|%s|%s|%s",
                                                     g_opacityValue, g_isTopmost ? 1 : 0, g_isPassthrough ? 1 : 0,
-                                                    g_toggleHotkey.c_str(), g_interactiveHotkey.c_str());
+                                                    g_toggleHotkey.c_str(), g_interactiveHotkey.c_str(), g_captureHotkey.c_str());
                                                 PostToUi(state);
                                                 std::wstring oldNote = ReadLegacyNotes();
                                                 if (!oldNote.empty()) PostToUi(std::wstring(L"legacy-note|") + oldNote);
@@ -526,17 +748,7 @@ void EnsureWebViews() {
                                     MessageBoxW(g_hwnd, L"PrivaLayer UI files are missing. Reinstall the complete application folder.", kAppName, MB_ICONERROR);
                                 }
                             }
-                            g_webEnvironment->CreateCoreWebView2Controller(g_hwnd,
-                                Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                                    [](HRESULT browserResult, ICoreWebView2Controller* browserController) -> HRESULT {
-                                        if (FAILED(browserResult) || !browserController) return S_OK;
-                                        g_browserController = browserController;
-                                        g_browserController->get_CoreWebView2(&g_browserView);
-                                        LayoutBrowser();
-                                        g_browserController->put_IsVisible(g_browserVisible ? TRUE : FALSE);
-                                        if (g_browserView) g_browserView->Navigate(L"https://aistudio.google.com/");
-                                        return S_OK;
-                                    }).Get());
+                            CreateBrowserTab(L"https://www.google.com/");
                             return S_OK;
                         }).Get());
                 return S_OK;
@@ -554,7 +766,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_CREATE: {
         g_hwnd = hwnd;
         EnsureWebViews();
-        ApplyHotkeys(g_toggleHotkey, g_interactiveHotkey, false);
+        ApplyHotkeys(g_toggleHotkey, g_interactiveHotkey, g_captureHotkey, false);
         SetLayerOpacity(g_opacityValue);
         SetTopmost(g_isTopmost);
         SetPassThrough(g_isPassthrough);
@@ -586,6 +798,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         else if (wParam == HOTKEY_INTERACTIVE) {
             SetPassThrough(!g_isPassthrough);
             PostToUi(g_isPassthrough ? L"native-passthrough|1" : L"native-passthrough|0");
+        } else if (wParam == HOTKEY_CAPTURE) {
+            CaptureScreenNow();
         }
         return 0;
     case WM_COMMAND:
@@ -606,7 +820,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         RemoveTrayIcon();
         UnregisterHotKey(hwnd, HOTKEY_TOGGLE);
         UnregisterHotKey(hwnd, HOTKEY_INTERACTIVE);
-        if (g_browserController) g_browserController->Close();
+        UnregisterHotKey(hwnd, HOTKEY_CAPTURE);
+        for (const auto& tab : g_browserTabs) {
+            if (tab && tab->controller) tab->controller->Close();
+        }
         if (g_uiController) g_uiController->Close();
         PostQuitMessage(0);
         return 0;
