@@ -58,7 +58,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 التقاط الشاشة يتم فقط بطلب مباشر من المستخدم من زر Capture أو اختصار الالتقاط. يلتقط سطح المكتب الافتراضي كاملًا، ويحفظ الصورة محليًا ويضعها في Clipboard. لا توجد لقطات تلقائية أو رفع للصور في الخلفية.
 
-الشفافية وClick-through لا تضمنان استبعاد النافذة من كل برامج الاجتماعات أو التسجيل أو Remote Desktop. تختلف طرق الالتقاط من تطبيق لآخر؛ اختبر السلوك مع برنامج المشاركة الذي تستخدمه. لا يُقدّم التطبيق ضمان إخفاء مطلقًا.
+PrivaLayer requests Windows `WDA_EXCLUDEFROMCAPTURE` by default. The app reports whether Windows accepted the display-affinity request in Preferences → Privacy. This is not a universal guarantee: Windows documents the API as protecting against a specific set of public capture APIs, and Discord documents that it uses multiple capture methods. Test the exact Discord screen-share mode you use; do not assume the overlay is excluded until you confirm it from a second account/device.
 
 ## AI assistant
 
